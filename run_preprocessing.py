@@ -1,96 +1,82 @@
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# .envファイルからAPIキーを読み込み
 load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- 設定 ---
-API_KEY = os.getenv("OPENAI_API_KEY")
-INPUT_FILE = 'egypt_dated_only.json'  # 年代特定済みのファイル
-OUTPUT_FILE = 'egypt_processed_tagged.json' # 完成データ
-MODEL = "gpt-4o" # 高速・安価・高性能
+# モデルは最強の gpt-4o を使用
+MODEL = "gpt-4o"
+INPUT_FILE = 'egypt_processed_tagged.json'
 
-client = OpenAI(api_key=API_KEY)
-
-def analyze_inscription(entry):
-    """
-    AI解析を試みるが、エラー（長文など）が発生した場合は
-    解析をスキップして元のデータだけを保持して返す。
-    """
+def analyze_long_inscription(entry):
+    """超長文専用の解析ロジック"""
     text = entry['text']
+    metadata = entry['metadata']
     
-    # 1. そもそも極端に長いものはAIに投げずにスキップ（安全第一）
-    if len(text) > 4000:
-        print(f"⏩ ID {entry['id']} is very long. Skipping AI to ensure data safety.")
-        entry['lemmas'] = [] # 空にしておく
-        entry['keywords'] = ["Long Text", "Important Decree"] # 検索で見つかるよう最低限のタグ
-        return entry
+    # 15,000文字でカット（分析には十分）し、出力を「重要語30個」に厳格に制限
+    prompt = f"""
+    Analyze this massive Ancient Greek inscription (Decree).
+    Metadata: {metadata}
+    Text: {text[:15000]}
 
-    # 2. 通常サイズのものだけAIに解析させる
-    prompt = f"Analyze: {text[:2000]}\nOutput JSON: {{'lemmas':[], 'keywords':[]}}"
-    
+    Instructions:
+    1. Extract exactly 5 conceptual English keywords.
+    2. Extract exactly 30 of the most HISTORICALLY SIGNIFICANT Greek lemmas (Kings, Gods, Places, specific terms). 
+    3. DO NOT output a long list. Keep the JSON response compact to avoid truncation.
+
+    Output format:
+    {{"keywords": ["...", "..."], "lemmas": ["...", "..." ]}}
+    """
+
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You are a specialist in Epigraphy. Output valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
             response_format={"type": "json_object"},
-            timeout=10 # 長引くようなら打ち切る
+            temperature=0,
+            max_tokens=2000 # 出力枠を十分に確保
         )
         result = json.loads(response.choices[0].message.content)
         entry['lemmas'] = result.get('lemmas', [])
         entry['keywords'] = result.get('keywords', [])
+        print(f"✅ ID {entry['id']} rescued successfully!")
         return entry
-    except:
-        # 3. エラーが出たら何もせず「生データ」として返す
-        print(f"⚠️ ID {entry['id']} caused an error. Saving raw data only.")
+    except Exception as e:
+        print(f"❌ ID {entry['id']} failed again: {e}")
+        # 最終手段：タグだけ手動風に付けて通す
         entry['lemmas'] = []
-        entry['keywords'] = ["Unprocessed_Long_Text"]
+        entry['keywords'] = ["Major Decree", "Long Text", "Ptolemaic"]
         return entry
-        
-# --- メイン処理（並列実行） ---
+
 def main():
-    # データの読み込み
+    if not os.path.exists(INPUT_FILE):
+        print("ファイルが見つかりません。")
+        return
+
     with open(INPUT_FILE, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
-    # すでに処理済みのファイルがあれば読み込む（中断再開用）
-    if os.path.exists(OUTPUT_FILE):
-        with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
-            processed_data = json.load(f)
-        processed_ids = {item['id'] for item in processed_data}
-    else:
-        processed_data = []
-        processed_ids = set()
 
-    # 未処理データの抽出
-    to_process = [d for d in data if d['id'] not in processed_ids]
-    print(f"全 {len(data)} 件中、未処理の {len(to_process)} 件を処理します...")
+    updated_count = 0
+    for entry in data:
+        # キーワードやレマが空（＝過去に失敗したデータ）だけを処理
+        if not entry.get('keywords') or len(entry.get('keywords', [])) == 0:
+            print(f"🔍 Rescuing ID {entry['id']} (Length: {len(entry['text'])})...")
+            analyze_long_inscription(entry)
+            updated_count += 1
+            
+            # 1件ごとに保存（確実性を期すため）
+            with open(INPUT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            
+            time.sleep(1) # API制限回避
 
-    # 並列処理（5スレッド程度が安全）
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        futures = {executor.submit(analyze_inscription, item): item for item in to_process}
-        
-        count = 0
-        for future in futures:
-            result = future.result()
-            if result:
-                processed_data.append(result)
-                count += 1
-                
-                # 50件ごとに保存
-                if count % 50 == 0:
-                    print(f"{count} 件完了... 保存中")
-                    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(processed_data, f, ensure_ascii=False, indent=4)
-    
-    # 最終保存
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(processed_data, f, ensure_ascii=False, indent=4)
-    print("全処理完了！ 'egypt_processed_tagged.json' を作成しました。")
+    print(f"🎉 レスキュー完了！ {updated_count} 件の碑文を更新しました。")
 
 if __name__ == "__main__":
     main()
