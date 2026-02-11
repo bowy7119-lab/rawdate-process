@@ -2,7 +2,6 @@ import json
 import os
 import re
 from collections import defaultdict
-from math import sqrt
 from typing import Dict, List, Tuple
 
 import plotly.express as px
@@ -13,12 +12,17 @@ try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - optional dependency at runtime
     OpenAI = None
+try:
+    import chromadb
+except Exception:  # pragma: no cover - optional dependency at runtime
+    chromadb = None
 
 
 DATA_PATH = "egypt_processed_tagged.json"
 MODEL_NAME = "gpt-4o-mini"
 EMBED_MODEL = "text-embedding-3-small"
-EMBED_CACHE_PATH = ".cache/embeddings.json"
+CHROMA_DIR = ".chroma"
+CHROMA_COLLECTION = "inscriptions"
 
 
 def _get_api_key() -> str:
@@ -91,6 +95,35 @@ def search_inscriptions(data: List[Dict], greek_terms: List[str]) -> List[Dict]:
     return results
 
 
+def search_inscriptions_text(
+    data: List[Dict], terms: List[str], year_range: Tuple[int, int] | None = None
+) -> List[Tuple[Dict, float]]:
+    rx = _build_regex(terms)
+    results: List[Tuple[Dict, float]] = []
+    for item in data:
+        dmin = _safe_int(item.get("date_min"))
+        dmax = _safe_int(item.get("date_max"))
+        if year_range is not None and dmin is not None and dmax is not None:
+            start, end = year_range
+            if not (dmin <= end and dmax >= start):
+                continue
+
+        text = str(item.get("text", ""))
+        lemmas = item.get("lemmas", [])
+        keywords = item.get("keywords", [])
+        hay = " ".join(
+            [
+                text,
+                " ".join(str(x) for x in lemmas) if isinstance(lemmas, list) else str(lemmas),
+                " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
+            ]
+        )
+        matches = len(rx.findall(hay))
+        if matches > 0:
+            results.append((item, float(matches)))
+    return results
+
+
 def _year_range(date_min: int, date_max: int) -> Tuple[int, int]:
     if date_min is None or date_max is None:
         return None, None
@@ -149,6 +182,35 @@ def build_context(items: List[Dict], max_items: int = 20) -> str:
     return "\n\n".join(chunks)
 
 
+@st.cache_data(show_spinner=False)
+def get_date_bounds(data: List[Dict]) -> Tuple[int, int]:
+    mins = []
+    maxs = []
+    for item in data:
+        dmin = _safe_int(item.get("date_min"))
+        dmax = _safe_int(item.get("date_max"))
+        if dmin is not None:
+            mins.append(dmin)
+        if dmax is not None:
+            maxs.append(dmax)
+    if not mins or not maxs:
+        return -3000, 1000
+    return min(mins), max(maxs)
+
+
+def count_in_range(data: List[Dict], year_range: Tuple[int, int]) -> int:
+    start, end = year_range
+    count = 0
+    for item in data:
+        dmin = _safe_int(item.get("date_min"))
+        dmax = _safe_int(item.get("date_max"))
+        if dmin is None or dmax is None:
+            continue
+        if dmin <= end and dmax >= start:
+            count += 1
+    return count
+
+
 def run_rag_chat(context: str, user_message: str) -> str:
     api_key = _get_api_key()
     if not api_key:
@@ -197,6 +259,52 @@ def translate_to_japanese(text: str) -> str:
     return response.choices[0].message.content or ""
 
 
+def expand_query_for_search(user_query: str) -> List[str]:
+    # Build multiple query variants (JP -> EN/Greek) to improve recall.
+    api_key = _get_api_key()
+    if not api_key or OpenAI is None:
+        return [user_query]
+
+    client = OpenAI(api_key=api_key)
+    system_prompt = (
+        "You are a search assistant for ancient inscriptions. "
+        "Return ONLY JSON with keys: english_query, greek_keywords. "
+        "english_query: a short English paraphrase of the user query. "
+        "greek_keywords: a short list of relevant Ancient Greek lemmas or terms."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query},
+            ],
+            temperature=0.2,
+        )
+        content = resp.choices[0].message.content or "{}"
+        data = json.loads(content)
+        english_query = str(data.get("english_query", "")).strip()
+        greek_keywords = data.get("greek_keywords", [])
+        if isinstance(greek_keywords, list):
+            greek_text = " ".join(str(x) for x in greek_keywords)
+        else:
+            greek_text = str(greek_keywords)
+        queries = [user_query]
+        if english_query:
+            queries.append(english_query)
+        if greek_text.strip():
+            queries.append(greek_text.strip())
+        return list(dict.fromkeys([q for q in queries if q]))
+    except Exception:
+        return [user_query]
+
+
+def _truncate_text(text: str, max_chars: int = 4000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars]
+
+
 def _embed_texts(texts: List[str]) -> List[List[float]]:
     api_key = _get_api_key()
     if not api_key:
@@ -206,9 +314,9 @@ def _embed_texts(texts: List[str]) -> List[List[float]]:
 
     client = OpenAI(api_key=api_key)
     embeddings: List[List[float]] = []
-    batch_size = 100
+    batch_size = 25
     for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
+        batch = [_truncate_text(t) for t in texts[i : i + batch_size]]
         resp = client.embeddings.create(model=EMBED_MODEL, input=batch)
         embeddings.extend([e.embedding for e in resp.data])
     return embeddings
@@ -230,45 +338,142 @@ def _build_embedding_text(item: Dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
-@st.cache_data(show_spinner=False)
-def load_or_create_embeddings(data: List[Dict]) -> List[List[float]]:
-    if os.path.exists(EMBED_CACHE_PATH):
-        with open(EMBED_CACHE_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        if payload.get("count") == len(data):
-            return payload.get("embeddings", [])
+def _get_chroma_collection():
+    if chromadb is None:
+        raise RuntimeError("chromadb package is not available")
+    os.makedirs(CHROMA_DIR, exist_ok=True)
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    return client.get_or_create_collection(CHROMA_COLLECTION)
 
-    os.makedirs(os.path.dirname(EMBED_CACHE_PATH), exist_ok=True)
+
+def _needs_rebuild(collection) -> bool:
+    try:
+        peek = collection.get(limit=1, include=["metadatas"])
+        metas = peek.get("metadatas", [[]])[0]
+        if not metas:
+            return True
+        meta = metas[0]
+        return "date_min" not in meta or "date_max" not in meta
+    except Exception:
+        return True
+
+
+def build_chroma_index(data: List[Dict]):
+    collection = _get_chroma_collection()
+    existing = collection.count()
+    if existing == len(data) and not _needs_rebuild(collection):
+        return collection
+
+    # Rebuild if counts don't match
+    try:
+        collection.delete(where={})
+    except Exception:
+        pass
+
     texts = [_build_embedding_text(item) for item in data]
     embeddings = _embed_texts(texts)
-    with open(EMBED_CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump({"count": len(data), "embeddings": embeddings}, f)
-    return embeddings
+    ids = [str(item.get("id", idx)) for idx, item in enumerate(data)]
+    metadatas = []
+    for idx, item in enumerate(data):
+        metadatas.append(
+            {
+                "idx": idx,
+                "date_min": _safe_int(item.get("date_min")),
+                "date_max": _safe_int(item.get("date_max")),
+            }
+        )
+
+    batch_size = 1000
+    for i in range(0, len(data), batch_size):
+        collection.add(
+            ids=ids[i : i + batch_size],
+            embeddings=embeddings[i : i + batch_size],
+            metadatas=metadatas[i : i + batch_size],
+            documents=texts[i : i + batch_size],
+        )
+    return collection
 
 
-def _cosine_sim(a: List[float], b: List[float]) -> float:
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for x, y in zip(a, b):
-        dot += x * y
-        na += x * x
-        nb += y * y
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (sqrt(na) * sqrt(nb))
-
-
-def retrieve_top_k(
-    data: List[Dict], embeddings: List[List[float]], query: str, top_k: int
+def chroma_query(
+    data: List[Dict],
+    collection,
+    query: str,
+    top_k: int,
+    date_range: Tuple[int, int] | None = None,
 ) -> List[Tuple[Dict, float]]:
     query_emb = _embed_texts([query])[0]
-    scored = []
-    for idx, emb in enumerate(embeddings):
-        score = _cosine_sim(query_emb, emb)
-        scored.append((score, idx))
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return [(data[idx], score) for score, idx in scored[:top_k]]
+    where = None
+    if date_range is not None:
+        start, end = date_range
+        where = {"$and": [{"date_min": {"$lte": end}}, {"date_max": {"$gte": start}}]}
+    res = collection.query(
+        query_embeddings=[query_emb],
+        n_results=top_k,
+        include=["metadatas", "distances"],
+        where=where,
+    )
+    items: List[Tuple[Dict, float]] = []
+    metadatas = res.get("metadatas", [[]])[0]
+    distances = res.get("distances", [[]])[0]
+    for meta, dist in zip(metadatas, distances):
+        idx = meta.get("idx")
+        if idx is None:
+            continue
+        score = 1.0 / (1.0 + float(dist))
+        items.append((data[int(idx)], score))
+    return items
+
+
+def multi_query_retrieve(
+    data: List[Dict],
+    collection,
+    queries: List[str],
+    top_k: int,
+    date_range: Tuple[int, int] | None = None,
+) -> List[Tuple[Dict, float]]:
+    merged: Dict[str, Tuple[Dict, float]] = {}
+    for q in queries:
+        results = chroma_query(data, collection, q, top_k, date_range)
+        for item, score in results:
+            _id = str(item.get("id", "unknown"))
+            if _id not in merged or score > merged[_id][1]:
+                merged[_id] = (item, score)
+    ordered = sorted(merged.values(), key=lambda x: x[1], reverse=True)
+    return ordered[:top_k]
+
+
+def hybrid_retrieve(
+    data: List[Dict],
+    collection,
+    queries: List[str],
+    top_k: int,
+    date_range: Tuple[int, int] | None = None,
+    alpha: float = 0.7,
+) -> List[Tuple[Dict, float]]:
+    vec = multi_query_retrieve(data, collection, queries, top_k, date_range)
+    text = search_inscriptions_text(data, queries, year_range=date_range)
+
+    vec_map: Dict[str, Tuple[Dict, float]] = {str(item.get("id", "unknown")): (item, score) for item, score in vec}
+    if text:
+        max_text = max(score for _, score in text) or 1.0
+    else:
+        max_text = 1.0
+    text_map: Dict[str, Tuple[Dict, float]] = {}
+    for item, score in text:
+        _id = str(item.get("id", "unknown"))
+        text_map[_id] = (item, score / max_text)
+
+    merged: Dict[str, Tuple[Dict, float]] = {}
+    ids = set(vec_map.keys()) | set(text_map.keys())
+    for _id in ids:
+        item = vec_map.get(_id, text_map.get(_id))[0]
+        v = vec_map.get(_id, (item, 0.0))[1]
+        t = text_map.get(_id, (item, 0.0))[1]
+        score = alpha * v + (1.0 - alpha) * t
+        merged[_id] = (item, score)
+
+    ordered = sorted(merged.values(), key=lambda x: x[1], reverse=True)
+    return ordered[:top_k]
 
 
 def render_related_inscriptions(items: List[Tuple[Dict, float]]):
@@ -386,21 +591,25 @@ def main():
         st.header("碑文ベースのチャット")
         st.caption("回答は必ず [ID: 12345] の形式でエビデンスを付与します。")
 
-        st.subheader("埋め込み検索")
-        st.caption("初回のみ全碑文の埋め込み作成が必要です。時間とAPIコストがかかります。")
+        st.subheader("埋め込み検索 (ChromaDB)")
+        st.caption("初回のみ全碑文の埋め込み作成が必要です。以後は高速検索できます。")
+        # 年代フィルタを一旦無効化（常に全件対象）
         top_k = st.slider("参照する碑文数 (Top-K)", min_value=5, max_value=50, value=20)
         min_score = st.slider("一致度しきい値", min_value=0.0, max_value=0.6, value=0.25, step=0.05)
-        build_clicked = st.button("埋め込みを準備する", key="embed_build")
+        build_clicked = st.button("ChromaDBを準備する", key="embed_build")
+        expand_query = st.checkbox("日本語クエリを拡張して検索精度を上げる", value=True)
+        use_hybrid = st.checkbox("ベクトル+文字列のハイブリッド検索", value=True)
+        alpha = st.slider("ベクトル寄りの重み", min_value=0.0, max_value=1.0, value=0.7, step=0.05)
 
-        if "embeddings_ready" not in st.session_state:
-            st.session_state.embeddings_ready = False
+        if "chroma_ready" not in st.session_state:
+            st.session_state.chroma_ready = False
 
-        if build_clicked or not st.session_state.embeddings_ready:
-            with st.status("Building / loading embeddings...", expanded=True) as status:
-                embeddings = load_or_create_embeddings(data)
-                st.session_state.embeddings = embeddings
-                st.session_state.embeddings_ready = True
-                status.update(label=f"Embeddings ready: {len(embeddings):,}", state="complete")
+        if build_clicked or not st.session_state.chroma_ready:
+            with st.status("Building / loading ChromaDB index...", expanded=True) as status:
+                collection = build_chroma_index(data)
+                st.session_state.chroma_collection = collection
+                st.session_state.chroma_ready = True
+                status.update(label=f"ChromaDB ready: {collection.count():,}", state="complete")
 
         if "chat_messages" not in st.session_state:
             st.session_state.chat_messages = []
@@ -419,17 +628,27 @@ def main():
                     st.write(user_message)
 
             with st.spinner("埋め込み検索中..."):
-                if not st.session_state.embeddings_ready:
-                    embeddings = load_or_create_embeddings(data)
-                    st.session_state.embeddings = embeddings
-                    st.session_state.embeddings_ready = True
-                retrieved_scored = retrieve_top_k(
-                    data, st.session_state.embeddings, user_message, top_k
-                )
+                if not st.session_state.chroma_ready:
+                    collection = build_chroma_index(data)
+                    st.session_state.chroma_collection = collection
+                    st.session_state.chroma_ready = True
+                queries = [user_message]
+                if expand_query:
+                    queries = expand_query_for_search(user_message)
+                if use_hybrid:
+                    retrieved_scored = hybrid_retrieve(
+                        data, st.session_state.chroma_collection, queries, top_k, None, alpha
+                    )
+                else:
+                    retrieved_scored = multi_query_retrieve(
+                        data, st.session_state.chroma_collection, queries, top_k, None
+                    )
             retrieved = [item for item, _ in retrieved_scored]
             context = build_context(retrieved, max_items=top_k)
             if retrieved_scored and retrieved_scored[0][1] < min_score:
                 render_related_inscriptions(retrieved_scored[: min(top_k, 10)])
+            if not retrieved_scored:
+                st.warning("指定した年代範囲に該当する碑文がありません。年代範囲を広げてください。")
             st.subheader("参照した碑文リスト")
             for item, score in retrieved_scored:
                 _id = item.get("id", "unknown")
