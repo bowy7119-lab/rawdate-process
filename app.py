@@ -23,6 +23,7 @@ MODEL_NAME = "gpt-4o-mini"
 EMBED_MODEL = "text-embedding-3-small"
 CHROMA_DIR = ".chroma"
 CHROMA_COLLECTION = "inscriptions"
+TRANSLATE_MODEL = "gpt-4o"
 
 
 def _get_api_key() -> str:
@@ -244,17 +245,21 @@ def translate_to_japanese(text: str) -> str:
         raise RuntimeError("openai package is not available")
     client = OpenAI(api_key=api_key)
     system_prompt = (
-        "You are a careful translator of Ancient Greek inscriptions. "
-        "Translate the provided inscription into concise, accurate Japanese. "
-        "Do not add interpretations not grounded in the text."
+        "You are a skilled translator of Ancient Greek inscriptions. "
+        "Provide a natural, readable Japanese translation while staying faithful to the text. "
+        "Rules: "
+        "1) Preserve proper names and technical terms; use standard scholarly transliterations. "
+        "2) If a segment is unclear, mark with （不明） or （不確実）. "
+        "3) Keep line order if possible, but prioritize readability. "
+        "Return ONLY the Japanese translation, no extra commentary."
     )
     response = client.chat.completions.create(
-        model=MODEL_NAME,
+        model=TRANSLATE_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ],
-        temperature=0.2,
+        temperature=0.0,
     )
     return response.choices[0].message.content or ""
 
@@ -542,7 +547,7 @@ def main():
 
             st.subheader("Hit List")
             for item in st.session_state.trend_results:
-                _id = item.get("id", "unknown")
+                _id = str(item.get("id", "unknown"))
                 header = f"[ID: {_id}] {item.get('region', '')} ({item.get('date_min', '')}–{item.get('date_max', '')})"
                 translate_key = f"translate_{_id}"
                 cache_key = f"jp_translation_{_id}"
@@ -557,13 +562,12 @@ def main():
                     st.session_state[error_key] = ""
                 if open_key not in st.session_state:
                     st.session_state[open_key] = False
+                if st.session_state[cache_key]:
+                    st.session_state[open_key] = True
 
-                expanded = (
-                    st.session_state[open_key]
-                    or bool(st.session_state[cache_key])
-                    or st.session_state["last_translated_id"] == _id
-                )
-                with st.expander(header, expanded=expanded):
+                open_now = st.checkbox(f"▼ {header}", value=st.session_state[open_key], key=f"toggle_{_id}")
+                st.session_state[open_key] = open_now
+                if open_now:
                     if st.button("この碑文を日本語訳", key=translate_key):
                         st.session_state[open_key] = True
                         st.session_state["last_translated_id"] = _id
