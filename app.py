@@ -28,7 +28,6 @@ CHROMA_COLLECTION = "inscriptions"
 TRANSLATE_MODEL = "gpt-4o"
 CHAT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
 EXPANSION_CACHE_PATH = ".cache/greek_expansion.json"
-KEYWORDS_EN_CACHE_PATH = ".cache/keywords_en.json"
 
 
 def _get_api_key() -> str:
@@ -151,13 +150,11 @@ def _tokenize_hay(item: Dict) -> List[str]:
     text = str(item.get("text", ""))
     lemmas = item.get("lemmas", [])
     keywords = item.get("keywords", [])
-    keywords_en = get_english_keywords_from_keywords(keywords)
     hay = " ".join(
         [
             text,
             " ".join(str(x) for x in lemmas) if isinstance(lemmas, list) else str(lemmas),
             " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
-            " ".join(str(x) for x in keywords_en) if keywords_en else "",
         ]
     )
     hay_norm = _strip_diacritics(hay)
@@ -614,66 +611,6 @@ def ai_expand_terms(user_query: str) -> List[str]:
     return []
 
 
-def load_keywords_en_cache() -> Dict[str, List[str]]:
-    if not os.path.exists(KEYWORDS_EN_CACHE_PATH):
-        return {}
-    try:
-        with open(KEYWORDS_EN_CACHE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_keywords_en_cache(cache: Dict[str, List[str]]):
-    os.makedirs(os.path.dirname(KEYWORDS_EN_CACHE_PATH), exist_ok=True)
-    with open(KEYWORDS_EN_CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
-
-
-def get_english_keywords_from_keywords(keywords) -> List[str]:
-    if not keywords:
-        return []
-    if isinstance(keywords, list):
-        key = "|".join(str(x) for x in keywords)
-    else:
-        key = str(keywords)
-
-    cache = load_keywords_en_cache()
-    if key in cache:
-        return cache[key]
-
-    api_key = _get_api_key()
-    if not api_key or OpenAI is None:
-        return []
-
-    client = OpenAI(api_key=api_key)
-    system_prompt = (
-        "Translate the following list of keywords into concise English keywords. "
-        "Return ONLY JSON with key 'english_keywords' as a list of short terms."
-    )
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": key},
-            ],
-            temperature=0.2,
-        )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
-        ek = data.get("english_keywords", [])
-        if isinstance(ek, list):
-            ek = [str(x).strip() for x in ek if str(x).strip()]
-        else:
-            ek = []
-        cache[key] = ek
-        save_keywords_en_cache(cache)
-        return ek
-    except Exception:
-        return []
-
-
 def _truncate_text(text: str, max_chars: int = 4000) -> str:
     if len(text) <= max_chars:
         return text
@@ -701,7 +638,6 @@ def _build_embedding_text(item: Dict) -> str:
     text = str(item.get("text", ""))
     lemmas = item.get("lemmas", [])
     keywords = item.get("keywords", [])
-    keywords_en = get_english_keywords_from_keywords(keywords)
     parts = [text]
     if isinstance(lemmas, list):
         parts.append(" ".join(str(x) for x in lemmas))
@@ -711,8 +647,6 @@ def _build_embedding_text(item: Dict) -> str:
         parts.append(" ".join(str(x) for x in keywords))
     else:
         parts.append(str(keywords))
-    if keywords_en:
-        parts.append(" ".join(keywords_en))
     return "\n".join(p for p in parts if p)
 
 

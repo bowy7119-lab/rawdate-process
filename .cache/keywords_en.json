@@ -1,150 +1,196 @@
 {
-  "Dedication|Mother|Brothers|Priest|Year|Today|Reading": [
-    "Dedication",
-    "Mother",
-    "Brothers",
-    "Priest",
-    "Year",
-    "Today",
-    "Reading"
-  ],
-  "Prohibition|Inscription|Antinooupolis|Egypt|3rd century|4th century": [
-    "Prohibition",
+  "Inscription|Egypt|Elephantine|1st century|2nd century": [
     "Inscription",
-    "Antinooupolis",
     "Egypt",
-    "3rd century",
-    "4th century"
+    "Elephantine",
+    "1st century",
+    "2nd century"
   ],
-  "Hero|Dedication|Naukratis|Ancient Greece|Egypt": [
-    "Hero",
+  "Appeal|Request|Inscription|Egypt|Elephantine": [
+    "Appeal",
+    "Request",
+    "Inscription",
+    "Egypt",
+    "Elephantine"
+  ],
+  "Dedication|Herakleios|God|Serapis|Abydos|Egypt|1st century AD": [
+    "Dedication",
+    "Herakleios",
+    "God",
+    "Serapis",
+    "Abydos",
+    "Egypt",
+    "1st century AD"
+  ],
+  "Dedication|Roman period|Egypt|Koptos|Inscription": [
+    "Dedication",
+    "Roman",
+    "Egypt",
+    "Koptos",
+    "Inscription"
+  ],
+  "Dedication|Temple|Isna|Ammon|Art|Antoninus|Year|Eusebeia": [
+    "Dedication",
+    "Temple",
+    "Isna",
+    "Ammon",
+    "Art",
+    "Antoninus",
+    "Year",
+    "Eusebeia"
+  ],
+  "Emperor|Dedication|Tax|Deity|Date|Roman|Egypt|Governance": [
+    "Emperor",
+    "Dedication",
+    "Tax",
+    "Deity",
+    "Date",
+    "Roman",
+    "Egypt",
+    "Governance"
+  ],
+  "Dedication|Naukratis|Ancient Greek|Inscription|Egypt": [
     "Dedication",
     "Naukratis",
-    "Ancient Greece",
+    "Ancient Greek",
+    "Inscription",
     "Egypt"
   ],
-  "Dedication|Ptolemaic|Egypt|Religious|Inscription": [
+  "Dedication|Isis|Year|Emperor|Philae|Egypt|Religious|Hellenistic": [
     "Dedication",
-    "Ptolemaic",
+    "Isis",
+    "Year",
+    "Emperor",
+    "Philae",
     "Egypt",
     "Religious",
-    "Inscription"
-  ],
-  "Dedication|God|Naukratis|Ancient Greece|Religion": [
-    "Dedication",
-    "God",
-    "Naukratis",
-    "Ancient Greece",
-    "Religion"
-  ],
-  "Dedication|Antinous|Blessing|Divinity|Egypt": [
-    "Dedication",
-    "Antinous",
-    "Blessing",
-    "Divinity",
-    "Egypt"
-  ],
-  "King|Amasis|Ptolemaic|Egypt|Inscription|Hellenistic": [
-    "King",
-    "Amasis",
-    "Ptolemaic",
-    "Egypt",
-    "Inscription",
     "Hellenistic"
   ],
-  "Inscription|Dedication|Mystery|Deity|Names|Egypt|Alexandria|Hellenistic": [
-    "Inscription",
-    "Dedication",
-    "Mystery",
-    "Deity",
-    "Names",
-    "Egypt",
-    "Alexandria",
-    "Hellenistic"
-  ],
-  "Death|Soul|Afterlife|Elysium|Byzantine": [
+  "Death|Christ|Blessing|Byzantine|Inscription|Coptic|Prayer": [
     "Death",
-    "Soul",
-    "Afterlife",
-    "Elysium",
-    "Byzantine"
+    "Christ",
+    "Blessing",
+    "Byzantine",
+    "Inscription",
+    "Coptic",
+    "Prayer"
   ],
-  "Arrival|Great|Dedication|Egypt|Inscription": [
-    "Arrival",
-    "Great",
+  "Soldier|Legion|Dedication|Emperor|Date|Egypt|Roman|Eileithyias": [
+    "Soldier",
+    "Legion",
     "Dedication",
+    "Emperor",
+    "Date",
     "Egypt",
+    "Roman",
+    "Eileithyias"
+  ],
+  "Governor|Egypt|Dedication|Roman period|Inscription": [
+    "Governor",
+    "Egypt",
+    "Dedication",
+    "Roman",
     "Inscription"
   ],
-  "Dedication|Naukratis|Egypt|6th century BC|5th century BC": [
+  "Dedication|Naukratis|Egypt|6th century BC|Inscription": [
     "Dedication",
     "Naukratis",
     "Egypt",
     "6th century BC",
-    "5th century BC"
+    "Inscription"
   ],
-  "Dedication|Worship|Deity|Egypt|1st Century": [
-    "Dedication",
-    "Worship",
-    "Deity",
-    "Egypt",
-    "1st Century"
-  ],
-  "Burial|Inheritance|Dedication|Deity|Tax|Community|Prohibition": [
-    "Burial",
-    "Inheritance",
-    "Dedication",
-    "Deity",
-    "Tax",
-    "Community",
-    "Prohibition"
-  ],
-  "Honor|Pasion|Hipparch|Dedication|Hellenistic": [
-    "Honor",
-    "Passion",
-    "Hipparch",
-    "Dedication",
-    "Hellenistic"
-  ],
-  "Dedication|Date|Hercules|Roman|Egypt": [
-    "Dedication",
+  "Date|Dedication|Apollo|Authority|Egypt": [
     "Date",
-    "Hercules",
-    "Roman",
-    "Egypt"
-  ],
-  "Dedication|Apollo|Identity|Naukratis|Ancient Greece": [
     "Dedication",
     "Apollo",
-    "Identity",
-    "Naukratis",
-    "Ancient Greece"
+    "Authority",
+    "Egypt"
   ],
-  "Beauty|Year|Dedication|Roman Empire|Akoris": [
-    "Beauty",
-    "Year",
+  "Inscription|Dedication|Deity|Peace|Egypt|3rd Century|Faiyum|Cultural|Religious": [
+    "Inscription",
     "Dedication",
-    "Roman Empire",
-    "Akoris"
-  ],
-  "Sun|Economist|Lord|God|Paul|Son|Date|Akoris": [
-    "Sun",
-    "Economist",
-    "Lord",
-    "God",
-    "Paul",
-    "Son",
-    "Date",
-    "Akoris"
-  ],
-  "Emperor|Dedication|Building|Egypt|Date|Governor|Deity": [
-    "Emperor",
-    "Dedication",
-    "Building",
+    "Deity",
+    "Peace",
     "Egypt",
-    "Date",
-    "Governor",
-    "Deity"
+    "3rd Century",
+    "Faiyum",
+    "Cultural",
+    "Religious"
+  ],
+  "Dedication|Lucius|Attius|Friend|Year|Claudius|Leonius|Good|Egypt": [
+    "Dedication",
+    "Lucius",
+    "Attius",
+    "Friend",
+    "Year",
+    "Claudius",
+    "Leonius",
+    "Good",
+    "Egypt"
+  ],
+  "Royal Decree|Ptolemaic Dynasty|Divine Favor|Egypt|Isis|Horus|Religious Authority|Tax Exemption|Dedication": [
+    "Royal Decree",
+    "Ptolemaic",
+    "Divine Favor",
+    "Egypt",
+    "Isis",
+    "Horus",
+    "Religious Authority",
+    "Tax Exemption",
+    "Dedication"
+  ],
+  "Dedication|Gods|Olympians|Egypt|Hellenistic": [
+    "Dedication",
+    "Gods",
+    "Olympians",
+    "Egypt",
+    "Hellenistic"
+  ],
+  "Dedication|Priest|Year|God|Emperor|Tax|Worship|Blessing": [
+    "Dedication",
+    "Priest",
+    "Year",
+    "God",
+    "Emperor",
+    "Tax",
+    "Worship",
+    "Blessing"
+  ],
+  "Child|Mother|Tomb|Light|Themis|Sun|Years|Virgin|Libya": [
+    "Child",
+    "Mother",
+    "Tomb",
+    "Light",
+    "Themis",
+    "Sun",
+    "Years",
+    "Virgin",
+    "Libya"
+  ],
+  "Friendship|Year|Audnaios|Arsinoe|Pamphylia|Dedication": [
+    "Friendship",
+    "Year",
+    "Audnaios",
+    "Arsinoe",
+    "Pamphylia",
+    "Dedication"
+  ],
+  "Ptolemaic|Dedication|Egypt|1st century BC|Inscription": [
+    "Ptolemaic",
+    "Dedication",
+    "Egypt",
+    "1st century BC",
+    "Inscription"
+  ],
+  "Tomb|Daughter|Death|Grief|Peace|Marriage|Years|Egypt": [
+    "Tomb",
+    "Daughter",
+    "Death",
+    "Grief",
+    "Peace",
+    "Marriage",
+    "Years",
+    "Egypt"
   ],
   "Dedication|Apollo|Naukratis|Egypt|6th century BC": [
     "Dedication",
@@ -153,5 +199,610 @@
     "Egypt",
     "6th century BC"
   ],
-  "Syringes|Thebes|1st century AD|Egypt|Inscription": [
-    "Syr
+  "Dedication|Land|Long|Wife|Children|Gold|Father": [
+    "Dedication",
+    "Land",
+    "Long",
+    "Wife",
+    "Children",
+    "Gold",
+    "Father"
+  ],
+  "Dedication|Greek|Egypt|1st century BC|Hellenistic": [
+    "Dedication",
+    "Greek",
+    "Egypt",
+    "1st century BC",
+    "Hellenistic"
+  ],
+  "Dedication|Ptolemaic|Cleopatra|Gods|Faiyum|Inscription|Temple|Offering|Egypt": [
+    "Dedication",
+    "Ptolemaic",
+    "Cleopatra",
+    "Gods",
+    "Faiyum",
+    "Inscription",
+    "Temple",
+    "Offering",
+    "Egypt"
+  ],
+  "Dedication|Ptolemaic Dynasty|Royal Family|Divine Favor|Egypt|Inscription|Apollonios|Cleopatra|Boubastis": [
+    "Dedication",
+    "Ptolemaic",
+    "Royal Family",
+    "Divine Favor",
+    "Egypt",
+    "Inscription",
+    "Apollonios",
+    "Cleopatra",
+    "Boubastis"
+  ],
+  "Osiris|Deity|Egyptian|Religion|Roman Period": [
+    "Osiris",
+    "Deity",
+    "Egyptian",
+    "Religion",
+    "Roman Period"
+  ],
+  "Dedication|Goddess|Worship|Woman|Good|Isis|Egypt|Ancient|Inscription": [
+    "Dedication",
+    "Goddess",
+    "Worship",
+    "Woman",
+    "Good",
+    "Isis",
+    "Egypt",
+    "Ancient",
+    "Inscription"
+  ],
+  "Dedication|Aphrodite|Memnon|Beauty|Egypt": [
+    "Dedication",
+    "Aphrodite",
+    "Memnon",
+    "Beauty",
+    "Egypt"
+  ],
+  "Lion|Dedication|Hellenistic|Egypt|Rhodes": [
+    "Lion",
+    "Dedication",
+    "Hellenistic",
+    "Egypt",
+    "Rhodes"
+  ],
+  "Year|Memory|Dedication|Egypt|Inscription": [
+    "Year",
+    "Memory",
+    "Dedication",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Deity|Inscription|Egypt|4th century": [
+    "Dedication",
+    "Deity",
+    "Inscription",
+    "Egypt",
+    "4th century"
+  ],
+  "Dedication|Brother|Isis|Philae|Gods|Egypt|Ancient|Worship": [
+    "Dedication",
+    "Brother",
+    "Isis",
+    "Philae",
+    "Gods",
+    "Egypt",
+    "Ancient",
+    "Worship"
+  ],
+  "Dedication|Goddess|Naukratis|Egypt|6th century BC": [
+    "Dedication",
+    "Goddess",
+    "Naukratis",
+    "Egypt",
+    "6th century BC"
+  ],
+  "Dedication|Demetrius|Lycia|Egypt|Ptolemaic|Memnonion": [
+    "Dedication",
+    "Demetrius",
+    "Lycia",
+    "Egypt",
+    "Ptolemaic",
+    "Memnonion"
+  ],
+  "Dedication|Peisistratus|Sminthios|Hellenistic|Egypt": [
+    "Dedication",
+    "Peisistratus",
+    "Sminthios",
+    "Hellenistic",
+    "Egypt"
+  ],
+  "Slave|Name|Roman|Egypt|4th century": [
+    "Slave",
+    "Name",
+    "Roman",
+    "Egypt",
+    "4th century"
+  ],
+  "Dedication|Roman Empire|Egypt|Narmouthis|Inscription": [
+    "Dedication",
+    "Roman Empire",
+    "Egypt",
+    "Narmouthis",
+    "Inscription"
+  ],
+  "Inscription|Egypt|5th-6th century|Akoris|Cultural|Greek|Burial": [
+    "Inscription",
+    "Egypt",
+    "5th-6th century",
+    "Akoris",
+    "Cultural",
+    "Greek",
+    "Burial"
+  ],
+  "Invocation|Demon|Soul|Ptolemaios|Deity|Arsinoē|Magic|Ritual|Egypt": [
+    "Invocation",
+    "Demon",
+    "Soul",
+    "Ptolemaios",
+    "Deity",
+    "Arsinoē",
+    "Magic",
+    "Ritual",
+    "Egypt"
+  ],
+  "Dedication|God|Emperor|Date|Roman|Egypt|Inscription": [
+    "Dedication",
+    "God",
+    "Emperor",
+    "Date",
+    "Roman",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Ancestry|Ptolemaic|Egypt|Inscription": [
+    "Dedication",
+    "Ancestry",
+    "Ptolemaic",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Memory|Virtue|Eusebia|Praise|Tomb|Ancient Egypt|Naukratis": [
+    "Dedication",
+    "Memory",
+    "Virtue",
+    "Eusebia",
+    "Praise",
+    "Tomb",
+    "Ancient Egypt",
+    "Naukratis"
+  ],
+  "Dedication|Asclepius|Aphrodite|Virtue|Greatness|City|Egypt|2nd century BC": [
+    "Dedication",
+    "Asclepius",
+    "Aphrodite",
+    "Virtue",
+    "Greatness",
+    "City",
+    "Egypt",
+    "2nd century BC"
+  ],
+  "Year|Tiberius|Date|Egypt|Inscription": [
+    "Year",
+    "Tiberius",
+    "Date",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Deity|Egypt|Thebes|Religious|Names|Offerings|Hellenistic": [
+    "Dedication",
+    "Deity",
+    "Egypt",
+    "Thebes",
+    "Religious",
+    "Names",
+    "Offerings",
+    "Hellenistic"
+  ],
+  "Nymphs|Isis|Water|Dedication|Egypt|Hymn|Divinity|Sacred|Heritage": [
+    "Nymphs",
+    "Isis",
+    "Water",
+    "Dedication",
+    "Egypt",
+    "Hymn",
+    "Divinity",
+    "Sacred",
+    "Heritage"
+  ],
+  "Deity|Hermes|Herakleios|Inscription|Egypt|Hibis|2nd-3rd century": [
+    "Deity",
+    "Hermes",
+    "Herakleios",
+    "Inscription",
+    "Egypt",
+    "Hibis",
+    "2nd century",
+    "3rd century"
+  ],
+  "Dedication|Ptolemaic|Royal|Divine|Family|Justice|Egypt|Inscription": [
+    "Dedication",
+    "Ptolemaic",
+    "Royal",
+    "Divine",
+    "Family",
+    "Justice",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Gods|Water|Joy|Ritual|Temple|Egypt|305 AD": [
+    "Dedication",
+    "Gods",
+    "Water",
+    "Joy",
+    "Ritual",
+    "Temple",
+    "Egypt",
+    "305 AD"
+  ],
+  "Donation|God|Life|Death|Abraham|Isaac|Jacob|Rest|Saints": [
+    "Donation",
+    "God",
+    "Life",
+    "Death",
+    "Abraham",
+    "Isaac",
+    "Jacob",
+    "Rest",
+    "Saints"
+  ],
+  "Peace|Nephiel|Date|Egypt|Inscription": [
+    "Peace",
+    "Nephiel",
+    "Date",
+    "Egypt",
+    "Inscription"
+  ],
+  "Dedication|Priest|Emperor|Family|Date|Temple|Egypt": [
+    "Dedication",
+    "Priest",
+    "Emperor",
+    "Family",
+    "Date",
+    "Temple",
+    "Egypt"
+  ],
+  "Ptolemaic|Dedication|Family|Egypt|Naukratis|Historical|Inscription": [
+    "Ptolemaic",
+    "Dedication",
+    "Family",
+    "Egypt",
+    "Naukratis",
+    "Historical",
+    "Inscription"
+  ],
+  "Dionysodoros|Ptolemaic|Egypt|Inscription|Ancient Greek": [
+    "Dionysodoros",
+    "Ptolemaic",
+    "Egypt",
+    "Inscription",
+    "Ancient Greek"
+  ],
+  "Dedication|Name|Hellenistic|Egypt|Rhodes": [
+    "Dedication",
+    "Name",
+    "Hellenistic",
+    "Egypt",
+    "Rhodes"
+  ],
+  "Saint|John|Archbishop|Chrysostom|Inscription|Egypt|Christianity|9th Century": [
+    "Saint",
+    "John",
+    "Archbishop",
+    "Chrysostom",
+    "Inscription",
+    "Egypt",
+    "Christianity",
+    "9th Century"
+  ],
+  "Dedication|Naukratis|Ancient Greek|Egypt|6th century BC": [
+    "Dedication",
+    "Naukratis",
+    "Ancient Greek",
+    "Egypt",
+    "6th century BC"
+  ],
+  "Blessing|Saint|Month|Christianity|Egypt": [
+    "Blessing",
+    "Saint",
+    "Month",
+    "Christianity",
+    "Egypt"
+  ],
+  "Deity|Ptolemaic|Egypt|Worship|Religion": [
+    "Deity",
+    "Ptolemaic",
+    "Egypt",
+    "Worship",
+    "Religion"
+  ],
+  "Dedication|God|Apollo|Naukratis|Egypt": [
+    "Dedication",
+    "God",
+    "Apollo",
+    "Naukratis",
+    "Egypt"
+  ],
+  "Emperor|Dedication|Goddess|Building|Date|Roman|Egypt|Military": [
+    "Emperor",
+    "Dedication",
+    "Goddess",
+    "Building",
+    "Date",
+    "Roman",
+    "Egypt",
+    "Military"
+  ],
+  "Governor|Badrmios|Hellenistic|Egypt|Inscription": [
+    "Governor",
+    "Badrmios",
+    "Hellenistic",
+    "Egypt",
+    "Inscription"
+  ],
+  "Saint|Month|Christianity|Dedication|Calendar": [
+    "Saint",
+    "Month",
+    "Christianity",
+    "Dedication",
+    "Calendar"
+  ],
+  "God|boithon|sorrow|Maria|immortal|offering": [
+    "God",
+    "boithon",
+    "sorrow",
+    "Maria",
+    "immortal",
+    "offering"
+  ],
+  "Arrival|Syringes|Thebes|1st century AD|Ancient Greek": [
+    "Arrival",
+    "Syringes",
+    "Thebes",
+    "1st century AD",
+    "Ancient Greek"
+  ],
+  "Love|Thought|Memory|Scribe|Dedication": [
+    "Love",
+    "Thought",
+    "Memory",
+    "Scribe",
+    "Dedication"
+  ],
+  "Dedication|Soul|Life|Justice|Eudaimonia|Plant|Roman Period|Alexandria": [
+    "Dedication",
+    "Soul",
+    "Life",
+    "Justice",
+    "Eudaimonia",
+    "Plant",
+    "Roman",
+    "Alexandria"
+  ],
+  "Aphrodite|Dedication|Naukratis|Egypt|6th century BC": [
+    "Aphrodite",
+    "Dedication",
+    "Naukratis",
+    "Egypt",
+    "6th century BC"
+  ],
+  "Ptolemaïs|Dedication|Priest|Diogenes|Tiberius|Claudius|Date|Epigraphy": [
+    "Ptolemaïs",
+    "Dedication",
+    "Priest",
+    "Diogenes",
+    "Tiberius",
+    "Claudius",
+    "Date",
+    "Epigraphy"
+  ],
+  "Dedication|Time|Roman Empire|Egypt|Akoris": [
+    "Dedication",
+    "Time",
+    "Roman Empire",
+    "Egypt",
+    "Akoris"
+  ],
+  "Greeting|Well-wishing|Communication|Cultural Exchange|Social Interaction": [
+    "Greeting",
+    "Well-wishing",
+    "Communication",
+    "Cultural Exchange",
+    "Social Interaction"
+  ],
+  "Dedication|Deity|Naukratis|Egypt|6th century BC": [
+    "Dedication",
+    "Deity",
+    "Naukratis",
+    "Egypt",
+    "6th century BC"
+  ],
+  "Dedication|Ptolemaic|Royalty|Cleopatra|Divine|Ancestry|Children|Honor": [
+    "Dedication",
+    "Ptolemaic",
+    "Royalty",
+    "Cleopatra",
+    "Divine",
+    "Ancestry",
+    "Children",
+    "Honor"
+  ],
+  "Savior|General|Letter|Tax|Emperor|Date|Dedication|Benefaction|Administration": [
+    "Savior",
+    "General",
+    "Letter",
+    "Tax",
+    "Emperor",
+    "Date",
+    "Dedication",
+    "Benefaction",
+    "Administration"
+  ],
+  "Inscription|Date|Roman Empire|Egypt|Akoris": [
+    "Inscription",
+    "Date",
+    "Roman Empire",
+    "Egypt",
+    "Akoris"
+  ],
+  "Dedication|Aphrodite|Naukratis|Ancient Greek|Religion": [
+    "Dedication",
+    "Aphrodite",
+    "Naukratis",
+    "Ancient Greek",
+    "Religion"
+  ],
+  "Lord|Help|Servant|Follower|Invocation": [
+    "Lord",
+    "Help",
+    "Servant",
+    "Follower",
+    "Invocation"
+  ],
+  "Dedication|Abydos|Ptolemaic|Memnonion|Egypt": [
+    "Dedication",
+    "Abydos",
+    "Ptolemaic",
+    "Memnonion",
+    "Egypt"
+  ],
+  "Dedication|Emperor|Age|Leontopolis|Egypt|Gratitude|Community": [
+    "Dedication",
+    "Emperor",
+    "Age",
+    "Leontopolis",
+    "Egypt",
+    "Gratitude",
+    "Community"
+  ],
+  "Indiction|Fortunate|Date|Roman|Egypt": [
+    "Indiction",
+    "Fortunate",
+    "Date",
+    "Roman",
+    "Egypt"
+  ],
+  "Dedication|Naukratis|Egypt|6th century BC|5th century BC": [
+    "Dedication",
+    "Naukratis",
+    "Egypt",
+    "6th century BC",
+    "5th century BC"
+  ],
+  "King|Ptolemy|God|Benefactor|Dedication|Apollodorus|Eagle|Friends|Supervisor|Inhabitants": [
+    "King",
+    "Ptolemy",
+    "God",
+    "Benefactor",
+    "Dedication",
+    "Apollodorus",
+    "Eagle",
+    "Friends",
+    "Supervisor",
+    "Inhabitants"
+  ],
+  "Wonder|Hermopolis|Syringes|3rd century|4th century|Egypt|Inscription|Cultural exchange": [
+    "Wonder",
+    "Hermopolis",
+    "Syringes",
+    "3rd century",
+    "4th century",
+    "Egypt",
+    "Inscription",
+    "Cultural exchange"
+  ],
+  "Dedication|Ptolemaic|Tax|Apollonios|Year|Fayoum|Soknopaiou|Gods|Agriculture": [
+    "Dedication",
+    "Ptolemaic",
+    "Tax",
+    "Apollonios",
+    "Year",
+    "Fayoum",
+    "Soknopaiou",
+    "Gods",
+    "Agriculture"
+  ],
+  "Emperor|Date|Dedication|Leontopolis|Egypt": [
+    "Emperor",
+    "Date",
+    "Dedication",
+    "Leontopolis",
+    "Egypt"
+  ],
+  "Dedication|Offering|Ritual|Roman|Egypt": [
+    "Dedication",
+    "Offering",
+    "Ritual",
+    "Roman",
+    "Egypt"
+  ],
+  "Dedication|Temple|Priesthood|Community|Donation|Construction|Ptolemaic|Religious|Inscription": [
+    "Dedication",
+    "Temple",
+    "Priesthood",
+    "Community",
+    "Donation",
+    "Construction",
+    "Ptolemaic",
+    "Religious",
+    "Inscription"
+  ],
+  "Dedication|Isis|Year|Worship|Roman Empire": [
+    "Dedication",
+    "Isis",
+    "Year",
+    "Worship",
+    "Roman Empire"
+  ],
+  "Dedication|Rest|Soul|Twin|Egypt": [
+    "Dedication",
+    "Rest",
+    "Soul",
+    "Twin",
+    "Egypt"
+  ],
+  "Zeus|Kasius|Dedication|Divine|Twin": [
+    "Zeus",
+    "Kasius",
+    "Dedication",
+    "Divine",
+    "Twin"
+  ],
+  "Dedication|Antoninus|Valerian|Family|Children|Deities|Date|Egypt": [
+    "Dedication",
+    "Antoninus",
+    "Valerian",
+    "Family",
+    "Children",
+    "Deities",
+    "Date",
+    "Egypt"
+  ],
+  "Dedication|Vision|Divine|Heritage|Place|Thebes|Family|Identity": [
+    "Dedication",
+    "Vision",
+    "Divine",
+    "Heritage",
+    "Place",
+    "Thebes",
+    "Family",
+    "Identity"
+  ],
+  "Nymphs|Orestiadae|Nile|Demetrius|Greeting|Egypt|Roman Empire": [
+    "Nymphs",
+    "Orestiadae",
+    "Nile",
+    "Demetrius",
+    "Greeting",
+    "Egypt",
+    "Roman Empire"
+  ]
+}
