@@ -7,16 +7,36 @@ import chromadb
 from openai import OpenAI
 from dotenv import load_dotenv
 from collections import defaultdict
+import unicodedata
 import re
 
 # --- 基本設定 ---
 load_dotenv()
 st.set_page_config(page_title="Egyptian Greek Inscription Analyzer", layout="wide")
+
+# パス設定
 CHROMA_PATH = "./chroma_db_store"
-DATA_FILE = "egypt_data_enriched.json"
+DATA_FILE = "egypt_data_final.json" # データファイル（Step 1.5のものを使用しますが、lemmasがなくても動くように設計）
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- データロード (キャッシュ) ---
+# --- サイドバー設定 ---
+with st.sidebar:
+    st.title("⚙️ Settings")
+    st.subheader("AI Model")
+    chat_model = st.selectbox(
+        "Select Model",
+        ["gpt-4o", "gpt-4o-mini"],
+        index=0,
+        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
+    )
+    st.divider()
+    st.subheader("Chat History")
+    if st.button("🗑️ Clear History"):
+        st.session_state.history = []
+        st.rerun()
+
+# --- データロード ---
 @st.cache_resource
 def get_chroma_db():
     if not os.path.exists(CHROMA_PATH): return None
@@ -28,234 +48,251 @@ def load_json_data():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# --- ① UIコンポーネント: 出典リスト表示 ---
-def render_citation_list(inscriptions, max_items=20, title_prefix="ヒットした碑文"):
+# --- 🛠️ ヘルパー関数: 強力な正規化 ---
+def normalize_text(text):
     """
-    IDと年代をリスト表示し、クリックで原文（折り返し）と英訳を表示する共通関数
+    碑文検索用にテキストを正規化する。
+    1. 小文字化
+    2. アクセント・気息記号の除去 (NFD分解)
+    3. 碑文記号 ([], (), <>, {}, .) の除去
+    4. 異体字 (ς -> σ) の統一
     """
-    st.markdown(f"### 📜 {title_prefix} (Top {min(len(inscriptions), max_items)})")
+    if not text: return ""
+    text = str(text).lower()
     
-    for item in inscriptions[:max_items]:
-        # ヘッダー部分
-        label = f"**ID: {item['id']}** | Date: {item.get('date_min')} ~ {item.get('date_max')} | {item.get('region_sub', 'Unknown')}"
-        
-        with st.expander(label):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Original Greek:**")
-                # ギリシア語を折り返して表示するためにmarkdownを使用
-                st.markdown(f"<div style='word-wrap: break-word;'>{item['text']}</div>", unsafe_allow_html=True)
-            with col2:
-                st.markdown("**English Translation:**")
-                st.write(item.get('english_translation', '(No translation)'))
+    # Unicode正規化 (アクセント分離して削除)
+    text = ''.join(c for c in unicodedata.normalize('NFD', text)
+                   if unicodedata.category(c) != 'Mn')
+    
+    # 記号削除: [ ] ( ) < > { } .
+    # これにより "[κ]αισαρ" -> "καισαρ" になる
+    text = re.sub(r'[\[\]\(\)<>\{\}\.]', '', text)
+    
+    # ファイナルシグマ等の統一
+    text = text.replace('ς', 'σ')
+    
+    # 余分な空白削除
+    text = text.strip()
+    
+    return text
 
-# --- ② ロジック: AIによるクエリ拡張 (修正版) ---
-def get_smart_search_terms(user_query):
+# --- 🧠 AIロジック: 検索語の拡張 ---
+def get_expanded_search_terms(query):
     """
-    ユーザーの入力から、検索に必要な「英語概念」と「ギリシア語の全変化形」を生成する
+    ユーザーの入力から、検索すべき「ギリシア語の全変化形」と「英語キーワード」をAIにリストアップさせる
     """
     system_prompt = """
-    You are an expert Ancient Greek Historian.
-    Analyze the user's query and return a JSON object with two lists.
-    
-    IMPORTANT: You must generate ACTUAL GREEK WORDS, not placeholders.
-    
-    Example Input: "καισαρ"
-    Example Output:
-    {
-      "greek_forms": ["καισαρ", "καισαρος", "καισαρι", "καισαρα", "καισαρων", "καισαρσι"],
-      "english_keywords": ["Caesar", "Emperor", "Imperial"]
-    }
-
-    Task:
-    1. "greek_forms": List the lemma AND ALL inflected forms (nom/gen/dat/acc, sg/pl).
-    2. "english_keywords": English translations and related concepts.
+    You are an expert Ancient Greek Philologist.
+    Analyze the user's query and return a JSON object with:
+    1. "greek_forms": A list of the lemma AND ALL inflected forms (cases, numbers).
+       Example: Input "καισαρ" -> Output ["καισαρ", "καισαρος", "καισαρι", "καισαρα", "καισαρων", "καισαρσι"]
+       IMPORTANT: Normalize them (no accents).
+    2. "english_keywords": English translations.
     """
     
     try:
         res = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o-mini", # 高速なモデルで十分
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query}
+                {"role": "user", "content": query}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1 # 創造性を下げて確実に答えさせる
+            temperature=0.0
         )
-        result = json.loads(res.choices[0].message.content)
-        
-        # 【保険】もしAIが入力した単語そのものを忘れていたら追加する
-        if user_query not in result.get('greek_forms', []):
-            result.setdefault('greek_forms', []).append(user_query)
-            
-        return result
+        return json.loads(res.choices[0].message.content)
     except:
-        # エラー時は入力そのものを返す
-        return {"greek_forms": [user_query], "english_keywords": [user_query]}
+        # エラー時は入力そのまま返す
+        return {"greek_forms": [query], "english_keywords": [query]}
 
-# --- ③ ロジック: 詳細検索 & 集計 ---
-def analyze_data(data, search_terms):
-    """
-    全データを走査し、以下の3つを計算する
-    1. 年代推移 (Line Chart用)
-    2. 語形ごとのヒット数 (Pie Chart用)
-    3. ヒットした碑文リスト
-    """
+# --- 📊 ロジック: データ分析 ---
+def analyze_data_robust(data, query):
     years_map = defaultdict(float)
     form_counts = defaultdict(int)
     matched_items = []
     
-    # 検索語の準備
-    greek_targets = [t for t in search_terms.get('greek_forms', []) if t]
-    english_targets = [t.lower() for t in search_terms.get('english_keywords', []) if t]
+    # 1. AIを使って検索語を拡張 (例: "καισαρ" -> ["καισαρ", "καισαρος", ...])
+    expanded = get_expanded_search_terms(query)
     
+    # 2. ターゲットを正規化セットに変換
+    # AIが出した変化形をさらに正規化してセットにする
+    target_greek = set([normalize_text(w) for w in expanded.get('greek_forms', [])])
+    target_eng = set([w.lower() for w in expanded.get('english_keywords', [])])
+    
+    # 念のため、ユーザー入力そのものもターゲットに追加
+    target_greek.add(normalize_text(query))
+
     for d in data:
         is_hit = False
-        text_greek = d['text'] # Case sensitive for Greek usually, but let's keep original
-        text_eng = d.get('english_translation', '').lower()
         
-        # A. ギリシア語形のマッチング（円グラフ用）
-        # 正規表現を使わず、単純な包含確認を行う（高速化のため）
-        for g_form in greek_targets:
-            if g_form in text_greek:
-                form_counts[g_form] += 1
+        # --- A. ギリシア語検索 (正規化マッチング) ---
+        text_raw = d.get('text', '')
+        # 原文を単語分割
+        # 記号込みでスペース区切りになっていることが多いので、まずはsplit
+        words_raw = re.split(r'\s+', text_raw)
+        
+        for w_raw in words_raw:
+            # 単語ごとに正規化 (例: "[κ]αισαρ" -> "καισαρ")
+            w_norm = normalize_text(w_raw)
+            
+            # 正規化後の単語がターゲットに含まれるか？
+            if w_norm in target_greek:
                 is_hit = True
+                if len(w_norm) > 1: # 1文字のゴミを除去
+                    # 円グラフ用: 正規化後の形でカウント（表記ゆれを統一するため）
+                    form_counts[w_norm] += 1
         
-        # B. 英語概念のマッチング（ヒット漏れ防止用）
+        # --- B. 英語検索 (救済措置) ---
         if not is_hit:
-            for e_word in english_targets:
-                if e_word in text_eng:
+            content_eng = str(d.get('english_translation', '')).lower()
+            # 英語キーワードのどれかが含まれているか
+            for eng_key in target_eng:
+                if eng_key in content_eng:
                     is_hit = True
                     break
-        
-        # ヒットした場合の年代集計
+
+        # --- 集計 ---
         if is_hit:
-            matched_items.append(d)
             s, e = int(d.get('date_min', 0)), int(d.get('date_max', 0))
-            if s == 0 and e == 0: continue
+            # 明らかにおかしい年代(0-0など)を除外するが、広範囲のものは許容
+            if s == 0 and e == 0: 
+                pass 
+            else:
+                duration = e - s + 1
+                # 期間が長すぎるもの(500年以上など)はノイズになるので重みを下げる、あるいは除外も検討
+                # ここでは単純に一様分布
+                weight = 1.0 / duration if duration > 0 else 1.0
+                for y in range(s, e + 1):
+                    years_map[y] += weight
+                matched_items.append(d)
             
-            duration = e - s + 1
-            weight = 1.0 / duration if duration > 0 else 1.0
-            for y in range(s, e + 1):
-                years_map[y] += weight
-                
-    # データフレーム変換
     df_trend = pd.DataFrame(list(years_map.items()), columns=["Year", "Frequency"]).sort_values("Year")
+    # 円グラフ: カウントが多い順
     df_pie = pd.DataFrame(list(form_counts.items()), columns=["Form", "Count"]).sort_values("Count", ascending=False)
     
-    return df_trend, df_pie, matched_items
+    return df_trend, df_pie, matched_items, list(target_greek)
+
+# --- UIコンポーネント: 出典リスト ---
+def render_citation_list(inscriptions, max_items=20, title_prefix="ヒットした碑文"):
+    st.markdown(f"### 📜 {title_prefix} (Top {min(len(inscriptions), max_items)})")
+    
+    seen_ids = set()
+    unique_items = []
+    for item in inscriptions:
+        if item['id'] not in seen_ids:
+            unique_items.append(item)
+            seen_ids.add(item['id'])
+            
+    for item in unique_items[:max_items]:
+        label = f"**ID: {item['id']}** | {item.get('date_min')}~{item.get('date_max')} | {item.get('region_sub', 'Unknown')}"
+        with st.expander(label):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Original Greek:**")
+                st.markdown(f"<div style='word-wrap: break-word; font-family: sans-serif; color: #aaa;'>{item['text']}</div>", unsafe_allow_html=True)
+            with col2:
+                st.markdown("**English Translation:**")
+                st.write(item.get('english_translation', '(No translation)'))
 
 # --- メイン UI ---
 st.title("🏛️ Egyptian Greek Inscription Analyzer")
-st.caption("Morphological Analysis & AI Historian")
+st.caption(f"Powered by AI & Robust Normalization | Model: {chat_model}")
 
 collection = get_chroma_db()
 full_data = load_json_data()
 
-if collection is None:
-    st.error("データベースが見つかりません。Step 2 を実行してください。")
+if collection is None or not full_data:
+    st.error("データ準備が完了していません。Step 1 (または1.5), Step 2 を実行してください。")
     st.stop()
 
-tab_trend, tab_chat = st.tabs(["📊 年代推移・語形分析", "🤖 歴史家チャット"])
+tab_trend, tab_chat = st.tabs(["📊 厳密語形分析", "🤖 歴史家チャット"])
 
-# === Tab 1: 年代推移 & 円グラフ ===
+# === Tab 1 ===
 with tab_trend:
-    st.subheader("概念・語形変化の分析")
-    query = st.text_input("検索語（例: καισαρ, プトレマイオス1世）", "καισαρ")
+    st.subheader("AI推論と正規化による年代推移")
+    query = st.text_input("検索語（例: καισαρ, ptolemy）", "καισαρ")
     
     if st.button("分析実行"):
-        with st.spinner("AIが語形変化を展開し、全碑文を解析中..."):
-            # 1. AI展開
-            expanded = get_smart_search_terms(query)
-            
-            # ユーザーへのフィードバック
-            with st.expander("🔍 AIが生成した検索ターゲット (クリックして確認)"):
-                st.write(f"**Greek Forms:** {', '.join(expanded.get('greek_forms', []))}")
-                st.write(f"**English Keywords:** {', '.join(expanded.get('english_keywords', []))}")
-            
-            # 2. 集計実行
-            df_trend, df_pie, hits = analyze_data(full_data, expanded)
-            
-            if not df_trend.empty:
-                # 3. グラフ表示
-                col_graph1, col_graph2 = st.columns([2, 1])
+        if not query:
+            st.warning("検索語を入力してください")
+        else:
+            with st.spinner("AIが変化形を展開し、全データを照合中..."):
+                df_trend, df_pie, hits, search_stems = analyze_data_robust(full_data, query)
                 
-                with col_graph1:
-                    st.markdown("#### 📈 年代推移 (Frequency)")
-                    fig_line = px.line(df_trend, x="Year", y="Frequency", title=f"Trend: {query}")
-                    st.plotly_chart(fig_line, use_container_width=True)
+                # 検索ターゲットの表示（最初の10個くらい）
+                st.info(f"🔍 検索ターゲット(正規化済): {', '.join(list(search_stems)[:15])} ...")
                 
-                with col_graph2:
-                    st.markdown("#### 🍰 語形出現比率")
-                    if not df_pie.empty:
-                        fig_pie = px.pie(df_pie, values="Count", names="Form", title="Greek Forms Distribution")
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    else:
-                        st.info("ギリシア語形の直接一致はありませんでした（英語概念のみヒット）")
+                if not df_trend.empty:
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown(f"#### 📈 年代推移 (Hit: {len(hits)})")
+                        fig_line = px.line(df_trend, x="Year", y="Frequency", title=f"Trend: {query}")
+                        st.plotly_chart(fig_line, use_container_width=True)
+                    with col2:
+                        st.markdown("#### 🍰 語形出現比率 (正規化後)")
+                        if not df_pie.empty:
+                            fig_pie = px.pie(df_pie, values="Count", names="Form", title=f"Variations of '{query}'")
+                            st.plotly_chart(fig_pie, use_container_width=True)
+                        else:
+                            st.caption("※ ギリシア語形の直接一致なし（英語概念ヒットのみ）")
+                            
+                    render_citation_list(hits, title_prefix="検索ヒット")
+                else:
+                    st.warning("該当データなし")
 
-                # 4. 共通リスト形式で出典表示
-                render_citation_list(hits, title_prefix="分析対象となった碑文")
-                
-            else:
-                st.warning("該当するデータが見つかりませんでした。")
-
-# === Tab 2: AIチャット ===
+# === Tab 2 ===
 with tab_chat:
     st.subheader("Evidence-Based Chat")
     
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    if "history" not in st.session_state: st.session_state.history = []
+    
+    for m in st.session_state.history:
+        st.chat_message(m["role"]).write(m["content"])
+    
+    if p := st.chat_input("質問を入力..."):
+        st.session_state.history.append({"role": "user", "content": p})
+        st.chat_message("user").write(p)
         
-    for msg in st.session_state.chat_history:
-        st.chat_message(msg["role"]).write(msg["content"])
-        
-    if prompt := st.chat_input("質問を入力 (例: プトレマイオス1世の統治について)"):
-        st.chat_message("user").write(prompt)
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        
-        with st.spinner("AIが関連語を推論し、文献を検索中..."):
-            # 1. AI推論 (Step 1)
-            plan = get_smart_search_terms(prompt)
-            search_text = " ".join(plan.get('english_keywords', []) + plan.get('greek_forms', []))
+        with st.spinner(f"{chat_model} が検索中..."):
+            # 1. 検索用クエリの生成 (AIで拡張)
+            expanded = get_expanded_search_terms(p)
+            search_text = " ".join(expanded.get('english_keywords', []) + expanded.get('greek_forms', []))
             
-            # 2. ベクトル検索 (Step 2)
-            # AIが考えた「ソテル」「ベレニケ」などの関連語も含めて検索
+            # 2. ベクトル検索
             q_vec = client.embeddings.create(input=[search_text], model="text-embedding-3-small").data[0].embedding
             results = collection.query(query_embeddings=[q_vec], n_results=20)
             
             # 3. コンテキスト構築
             context_str = ""
             ref_data = []
+            seen_refs = set()
             id_map = {str(d['id']): d for d in full_data}
             
             for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-                context_str += f"[ID: {meta['id']}] {doc[:600]}...\n\n"
-                # 元データを取得して参照リスト用にする
-                original = id_map.get(str(meta['id']))
-                if original:
-                    ref_data.append(original)
+                mid = str(meta['id'])
+                if mid not in seen_refs:
+                    context_str += f"[ID: {mid}] {doc[:600]}...\n\n"
+                    orig = id_map.get(mid)
+                    if orig: ref_data.append(orig)
+                    seen_refs.add(mid)
             
-            # 4. 回答生成 (Step 3)
-            system_msg = """
+            # 4. 回答生成
+            sys_msg = """
             あなたは古代エジプト・ギリシア碑文の専門家です。
-            ユーザーの質問に対し、提供された【Context】を証拠として用いながら、
-            日本語で、学術的かつ論理的に回答してください。
-            回答の中で主張を行う際は、必ず [ID: xxxxx] の形式で出典を明記してください。
+            証拠【Context】に基づき、必ず [ID: xxxxx] を引用して日本語で回答してください。
+            碑文特有の記号（[ ] や ( )）は、読みやすいように補完して解釈してください。
             """
             
-            response = client.chat.completions.create(
-                model="gpt-4o",
+            ans = client.chat.completions.create(
+                model=chat_model,
                 messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {prompt}"}
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {p}"}
                 ]
-            )
-            ans = response.choices[0].message.content
+            ).choices[0].message.content
             
         st.chat_message("assistant").write(ans)
-        st.session_state.chat_history.append({"role": "assistant", "content": ans})
+        st.session_state.history.append({"role": "assistant", "content": ans})
         
-        # 5. 共通リスト形式でエビデンス表示
-        with st.expander("📚 AIの検索戦略 & 参照エビデンス"):
-            st.info(f"**AIが検索した関連語:** {', '.join(plan.get('english_keywords', [])[:10])} ...")
-            render_citation_list(ref_data, title_prefix="回答に使用した碑文")
+        with st.expander("📚 参照エビデンス"):
+            render_citation_list(ref_data, title_prefix="参照データ")
