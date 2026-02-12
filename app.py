@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import unicodedata
+from difflib import SequenceMatcher
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
@@ -24,6 +26,8 @@ EMBED_MODEL = "text-embedding-3-small"
 CHROMA_DIR = ".chroma"
 CHROMA_COLLECTION = "inscriptions"
 TRANSLATE_MODEL = "gpt-4o"
+CHAT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
+EXPANSION_CACHE_PATH = ".cache/greek_expansion.json"
 
 
 def _get_api_key() -> str:
@@ -86,6 +90,19 @@ def _build_regex(terms: List[str]) -> re.Pattern:
     return re.compile(pattern, flags=re.IGNORECASE)
 
 
+def _strip_diacritics(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+
+
+def _expand_terms_for_regex(terms: List[str]) -> List[str]:
+    tokens: List[str] = []
+    for t in terms:
+        parts = [p for p in re.split(r"[\s,/;:()\\[\\]{}]+", t) if p]
+        tokens.extend(parts)
+    return list(dict.fromkeys(tokens))
+
+
 def search_inscriptions(data: List[Dict], greek_terms: List[str]) -> List[Dict]:
     rx = _build_regex(greek_terms)
     results = []
@@ -99,7 +116,10 @@ def search_inscriptions(data: List[Dict], greek_terms: List[str]) -> List[Dict]:
 def search_inscriptions_text(
     data: List[Dict], terms: List[str], year_range: Tuple[int, int] | None = None
 ) -> List[Tuple[Dict, float]]:
-    rx = _build_regex(terms)
+    expanded_terms = _expand_terms_for_regex(terms)
+    rx = _build_regex(expanded_terms)
+    norm_terms = [_strip_diacritics(t) for t in expanded_terms]
+    rx_norm = _build_regex(norm_terms)
     results: List[Tuple[Dict, float]] = []
     for item in data:
         dmin = _safe_int(item.get("date_min"))
@@ -119,10 +139,57 @@ def search_inscriptions_text(
                 " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
             ]
         )
-        matches = len(rx.findall(hay))
+        hay_norm = _strip_diacritics(hay)
+        matches = len(rx.findall(hay)) + len(rx_norm.findall(hay_norm))
         if matches > 0:
             results.append((item, float(matches)))
     return results
+
+
+def _tokenize_hay(item: Dict) -> List[str]:
+    text = str(item.get("text", ""))
+    lemmas = item.get("lemmas", [])
+    keywords = item.get("keywords", [])
+    hay = " ".join(
+        [
+            text,
+            " ".join(str(x) for x in lemmas) if isinstance(lemmas, list) else str(lemmas),
+            " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
+        ]
+    )
+    hay_norm = _strip_diacritics(hay)
+    return [t for t in re.split(r"[^\w]+", hay_norm) if t]
+
+
+def fuzzy_search_inscriptions(
+    data: List[Dict], terms: List[str], top_k: int = 20
+) -> List[Tuple[Dict, float]]:
+    term_tokens = []
+    for t in terms:
+        term_tokens.extend([p for p in re.split(r"[^\w]+", _strip_diacritics(t)) if p])
+    term_tokens = list(dict.fromkeys([t for t in term_tokens if len(t) >= 3]))
+    if not term_tokens:
+        return []
+
+    scored: List[Tuple[Dict, float]] = []
+    for item in data:
+        hay_tokens = _tokenize_hay(item)
+        if not hay_tokens:
+            continue
+        best = 0.0
+        for q in term_tokens:
+            for h in hay_tokens:
+                ratio = SequenceMatcher(None, q, h).ratio()
+                if ratio > best:
+                    best = ratio
+                if best >= 0.92:
+                    break
+            if best >= 0.92:
+                break
+        if best >= 0.75:
+            scored.append((item, best))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:top_k]
 
 
 def _year_range(date_min: int, date_max: int) -> Tuple[int, int]:
@@ -212,7 +279,13 @@ def count_in_range(data: List[Dict], year_range: Tuple[int, int]) -> int:
     return count
 
 
-def run_rag_chat(context: str, user_message: str, allow_background: bool, answer_len: int) -> str:
+def run_rag_chat(
+    context: str,
+    user_message: str,
+    allow_background: bool,
+    answer_len: int,
+    chat_model: str,
+) -> str:
     api_key = _get_api_key()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is missing in .env")
@@ -250,11 +323,26 @@ def run_rag_chat(context: str, user_message: str, allow_background: bool, answer
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_message}"},
     ]
     response = client.chat.completions.create(
-        model=MODEL_NAME,
+        model=chat_model or MODEL_NAME,
         messages=messages,
         temperature=0.2,
     )
     return response.choices[0].message.content or ""
+
+
+def build_translation_context(items: List[Tuple[Dict, float]], top_n: int) -> str:
+    if top_n <= 0:
+        return ""
+    parts = []
+    for item, _score in items[:top_n]:
+        _id = item.get("id", "unknown")
+        text = str(item.get("text", ""))
+        try:
+            jp = translate_to_japanese(text)
+        except Exception:
+            jp = ""
+        parts.append(f"[ID: {_id}] Japanese Translation:\n{jp}\nOriginal:\n{text}")
+    return "\n\n".join(p for p in parts if p)
 
 
 def translate_to_japanese(text: str) -> str:
@@ -284,6 +372,26 @@ def translate_to_japanese(text: str) -> str:
     return response.choices[0].message.content or ""
 
 
+GREEK_DICTIONARY = {
+    "ゼウス": ["ζευς", "διος", "διι", "δια", "ζην"],
+    "エレウテριオス": ["ελευθεριος", "ελευθεριου", "ελευθεριῳ", "ελευθεριον"],
+    "アポロン": ["απολλων", "απολλωνος", "απολλωνι", "απολλωνα"],
+    "アルテミス": ["αρτεμις", "αρτεμιδος", "αρτεμιδι", "αρτεμιν"],
+    "アテナ": ["αθηνα", "αθηνας", "αθηναι", "αθηνᾳ"],
+    "ヘルメス": ["ερμης", "ερμου", "ερμῃ", "ερμην"],
+    "ヘラクレス": ["ηρακλεης", "ηρακλεους", "ηρακλει", "ηρακλεα"],
+    "ヘラ": ["ηρα", "ηρας", "ηρᾳ", "ηραν"],
+    "アフロディテ": ["αφροδιτη", "αφροδιτης", "αφροδιτῃ", "αφροδιτην"],
+    "デメテル": ["δημητηρ", "δημητρος", "δημητρι", "δημητρα"],
+    "サラピス": ["σαραπις", "σαραπιδος", "σαραπιδι", "σαραπιν"],
+    "イシス": ["ισις", "ισιδος", "ισιδι", "ισιν"],
+    "オシリス": ["οσιρις", "οσιριδος", "οσιριδι", "οσιριν"],
+    "ホルス": ["ωρος", "ωρου", "ωρῳ", "ωρον"],
+    "アヌビス": ["ανουβις", "ανουβιος", "ανουβι", "ανουβιν"],
+    "セラピオン": ["σεραπιων", "σεραπιωνος", "σεραπιωνι", "σεραπιωνα"],
+}
+
+
 def expand_query_for_search(user_query: str) -> List[str]:
     # Build multiple query variants (JP -> EN/Greek) to improve recall.
     api_key = _get_api_key()
@@ -295,7 +403,8 @@ def expand_query_for_search(user_query: str) -> List[str]:
         "You are a search assistant for ancient inscriptions. "
         "Return ONLY JSON with keys: english_query, greek_keywords. "
         "english_query: a short English paraphrase of the user query. "
-        "greek_keywords: a short list of relevant Ancient Greek lemmas or terms."
+        "greek_keywords: a short list of relevant Ancient Greek lemmas or terms, "
+        "including common inflected forms when applicable."
     )
     try:
         resp = client.chat.completions.create(
@@ -318,10 +427,188 @@ def expand_query_for_search(user_query: str) -> List[str]:
         if english_query:
             queries.append(english_query)
         if greek_text.strip():
-            queries.append(greek_text.strip())
+            expanded = expand_greek_inflections(greek_text)
+            queries.append(" ".join(expanded))
+        # If query is Japanese and name-like, add common Greek inflections for Ptolemaios-like names
+        if "プトレマイオス" in user_query and "πτολεμα" not in greek_text:
+            queries.append("πτολεμαιος πτολεμαιου πτολεμαιῳ πτολεμαιον πτολεμαιε")
+        # Dictionary-based expansion for common deities/titles
+        for jp, forms in GREEK_DICTIONARY.items():
+            if jp in user_query:
+                queries.append(" ".join(forms))
+        # AI expansion fallback with caching
+        cached = load_expansion_cache()
+        if user_query in cached:
+            queries.append(" ".join(cached[user_query]))
+        else:
+            ai_forms = ai_expand_terms(user_query)
+            if ai_forms:
+                cached[user_query] = ai_forms
+                save_expansion_cache(cached)
+                queries.append(" ".join(ai_forms))
+        # If user typed Latin transliteration, add a naive Greek transliteration variant
+        latin_variant = translit_latin_to_greek(user_query)
+        if latin_variant and latin_variant != user_query:
+            queries.append(latin_variant)
         return list(dict.fromkeys([q for q in queries if q]))
     except Exception:
         return [user_query]
+
+
+def _is_greek_token(token: str) -> bool:
+    return bool(re.search(r"[\u0370-\u03FF\u1F00-\u1FFF]", token))
+
+
+def translit_latin_to_greek(text: str) -> str:
+    s = text.lower()
+    # Common digraphs
+    replacements = [
+        ("ph", "φ"),
+        ("ch", "χ"),
+        ("th", "θ"),
+        ("ps", "ψ"),
+        ("ks", "ξ"),
+        ("x", "ξ"),
+        ("ou", "ου"),
+        ("eu", "ευ"),
+        ("ei", "ει"),
+        ("oi", "οι"),
+        ("ai", "αι"),
+    ]
+    for a, b in replacements:
+        s = s.replace(a, b)
+    mapping = {
+        "a": "α",
+        "b": "β",
+        "g": "γ",
+        "d": "δ",
+        "e": "ε",
+        "z": "ζ",
+        "h": "η",
+        "i": "ι",
+        "k": "κ",
+        "l": "λ",
+        "m": "μ",
+        "n": "ν",
+        "o": "ο",
+        "p": "π",
+        "r": "ρ",
+        "s": "σ",
+        "t": "τ",
+        "u": "υ",
+        "y": "υ",
+        "w": "ω",
+    }
+    out = []
+    for ch in s:
+        if ch in mapping:
+            out.append(mapping[ch])
+        elif ch.isspace():
+            out.append(" ")
+    result = "".join(out).strip()
+    return result
+
+
+def expand_greek_inflections(text: str) -> List[str]:
+    terms = [t.strip() for t in re.split(r"[,\s]+", text) if t.strip()]
+    expanded = set(terms)
+    for t in terms:
+        if not _is_greek_token(t):
+            continue
+        base = _strip_diacritics(t)
+        expanded.add(base)
+        # Basic 2nd declension patterns (-ος)
+        if base.endswith("ος"):
+            stem = base[:-2]
+            expanded.update(
+                [
+                    base,
+                    stem + "ου",
+                    stem + "ῳ",
+                    stem + "ον",
+                    stem + "ε",
+                    stem + "οι",
+                    stem + "ους",
+                    stem + "ων",
+                ]
+            )
+        # Basic 1st declension (-ας)
+        elif base.endswith("ας"):
+            stem = base[:-2]
+            expanded.update(
+                [
+                    base,
+                    stem + "α",
+                    stem + "ᾳ",
+                    stem + "αν",
+                    stem + "αι",
+                    stem + "ας",
+                    stem + "ων",
+                ]
+            )
+        # Basic 1st declension (-ης)
+        elif base.endswith("ης"):
+            stem = base[:-2]
+            expanded.update(
+                [
+                    base,
+                    stem + "ου",
+                    stem + "ῃ",
+                    stem + "ην",
+                    stem + "αι",
+                    stem + "ας",
+                    stem + "ων",
+                ]
+            )
+        # Names like καισαρ -> καισαρος, καισαρι, καισαρα
+        elif base.endswith("ρ"):
+            expanded.update([base, base + "ος", base + "ι", base + "α"])
+    return list(expanded)
+
+
+def load_expansion_cache() -> Dict[str, List[str]]:
+    if not os.path.exists(EXPANSION_CACHE_PATH):
+        return {}
+    try:
+        with open(EXPANSION_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_expansion_cache(cache: Dict[str, List[str]]):
+    os.makedirs(os.path.dirname(EXPANSION_CACHE_PATH), exist_ok=True)
+    with open(EXPANSION_CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def ai_expand_terms(user_query: str) -> List[str]:
+    api_key = _get_api_key()
+    if not api_key or OpenAI is None:
+        return []
+    client = OpenAI(api_key=api_key)
+    system_prompt = (
+        "You are a philologist. Given a Japanese query, return ONLY JSON with key 'greek_forms' "
+        "containing a list of relevant Ancient Greek lemmas and inflected forms. "
+        "Return Greek forms only."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query},
+            ],
+            temperature=0.2,
+        )
+        content = resp.choices[0].message.content or "{}"
+        data = json.loads(content)
+        forms = data.get("greek_forms", [])
+        if isinstance(forms, list):
+            return [str(x) for x in forms if str(x).strip()]
+    except Exception:
+        return []
+    return []
 
 
 def _truncate_text(text: str, max_chars: int = 4000) -> str:
@@ -626,6 +913,8 @@ def main():
         alpha = st.slider("ベクトル寄りの重み", min_value=0.0, max_value=1.0, value=0.7, step=0.05)
         allow_background = st.checkbox("背景知識モード（一般的な歴史知識も許可）", value=False)
         answer_len = st.slider("回答の長さ", min_value=1, max_value=5, value=3)
+        chat_model = st.selectbox("チャットモデル", CHAT_MODELS, index=0)
+        translate_top_n = st.slider("重要碑文の自動翻訳数", min_value=0, max_value=5, value=2)
 
         if "chroma_ready" not in st.session_state:
             st.session_state.chroma_ready = False
@@ -671,20 +960,62 @@ def main():
                     )
             retrieved = [item for item, _ in retrieved_scored]
             context = build_context(retrieved, max_items=top_k)
+            translation_context = build_translation_context(retrieved_scored, translate_top_n)
+            if translation_context:
+                context = context + "\n\n[Japanese Translations]\n" + translation_context
             if retrieved_scored and retrieved_scored[0][1] < min_score:
                 render_related_inscriptions(retrieved_scored[: min(top_k, 10)])
             if not retrieved_scored:
-                st.warning("指定した年代範囲に該当する碑文がありません。年代範囲を広げてください。")
+                # Fallback to pure text/lemma/keyword search when vector search returns nothing
+                fallback = search_inscriptions_text(data, queries)
+                if fallback:
+                    retrieved_scored = fallback[:top_k]
+                    retrieved = [item for item, _ in retrieved_scored]
+                    context = build_context(retrieved, max_items=top_k)
+                else:
+                    fuzzy = fuzzy_search_inscriptions(data, queries, top_k=top_k)
+                    if fuzzy:
+                        retrieved_scored = fuzzy
+                        retrieved = [item for item, _ in retrieved_scored]
+                        context = build_context(retrieved, max_items=top_k)
+                        st.info("厳密一致が見つからないため、語形が近い碑文を提示しています。")
+                    else:
+                        st.warning("対応する碑文が見つかりませんでした。検索語や条件を見直してください。")
             st.subheader("参照した碑文リスト")
             for item, score in retrieved_scored:
-                _id = item.get("id", "unknown")
+                _id = str(item.get("id", "unknown"))
                 header = f"[ID: {_id}] score={score:.3f} {item.get('region', '')} ({item.get('date_min', '')}–{item.get('date_max', '')})"
                 with st.expander(header):
+                    chat_translate_key = f"chat_translate_{_id}"
+                    chat_cache_key = f"chat_jp_translation_{_id}"
+                    chat_error_key = f"chat_jp_translation_error_{_id}"
+                    if chat_cache_key not in st.session_state:
+                        st.session_state[chat_cache_key] = ""
+                    if chat_error_key not in st.session_state:
+                        st.session_state[chat_error_key] = ""
+
+                    if st.button("この碑文を日本語訳", key=chat_translate_key):
+                        st.session_state[chat_error_key] = ""
+                        with st.spinner("日本語訳を生成中..."):
+                            try:
+                                st.session_state[chat_cache_key] = translate_to_japanese(
+                                    str(item.get("text", ""))
+                                )
+                            except Exception as e:
+                                st.session_state[chat_error_key] = str(e)
+
+                    if st.session_state[chat_error_key]:
+                        st.error(st.session_state[chat_error_key])
+
+                    if st.session_state[chat_cache_key]:
+                        st.markdown("**日本語訳:**")
+                        st.write(st.session_state[chat_cache_key])
+
                     st.write(item.get("text", ""))
             with messages_box:
                 with st.chat_message("assistant"):
                     with st.spinner("回答生成中..."):
-                        answer = run_rag_chat(context, user_message, allow_background, answer_len)
+                        answer = run_rag_chat(context, user_message, allow_background, answer_len, chat_model)
                         st.write(answer)
             st.session_state.chat_messages.append({"role": "assistant", "content": answer})
 
