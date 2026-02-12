@@ -20,8 +20,30 @@ DATA_FILE = "egypt_data_final.json"
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- サイドバー設定 ---
+# --- サイドバー固定幅 & チャット履歴 ---
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "conversations" not in st.session_state:
+    st.session_state.conversations = []
+if "active_conversation" not in st.session_state:
+    st.session_state.active_conversation = None
+if "analysis_history" not in st.session_state:
+    st.session_state.analysis_history = []
+
 with st.sidebar:
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] {
+            width: 360px !important;
+        }
+        section[data-testid="stSidebar"] > div {
+            width: 360px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("⚙️ Settings")
     st.subheader("AI Model")
     chat_model = st.selectbox(
@@ -32,9 +54,29 @@ with st.sidebar:
     )
     st.divider()
     st.subheader("Chat History")
+    if st.button("🆕 New Chat"):
+        st.session_state.history = []
+        st.session_state.active_conversation = None
+        st.rerun()
     if st.button("🗑️ Clear History"):
         st.session_state.history = []
+        st.session_state.conversations = []
+        st.session_state.active_conversation = None
         st.rerun()
+    if st.session_state.conversations:
+        for idx, conv in enumerate(st.session_state.conversations[::-1]):
+            title = conv.get("title", f"Conversation {idx+1}")
+            if st.button(f"💬 {title}", key=f"conv_{idx}"):
+                st.session_state.history = conv.get("messages", [])
+                st.session_state.active_conversation = conv.get("id")
+                st.rerun()
+    if st.session_state.analysis_history:
+        st.subheader("分析履歴")
+        for idx, item in enumerate(st.session_state.analysis_history[::-1]):
+            title = item.get("title", f"Analysis {idx+1}")
+            if st.button(f"📊 {title}", key=f"analysis_{idx}"):
+                st.session_state["analysis_selected"] = item
+                st.rerun()
 
 # --- データロード ---
 @st.cache_resource
@@ -201,7 +243,7 @@ if collection is None or not full_data:
     st.error("データ準備が完了していません。Step 1/1.5, Step 2 を実行してください。")
     st.stop()
 
-tab_trend, tab_chat = st.tabs(["📊 厳密語形分析", "🤖 歴史家チャット"])
+tab_trend, tab_chat = st.tabs(["📊 年代推移", "💬 碑文チャット"])
 
 # === Tab 1: 年代推移 (完成済) ===
 with tab_trend:
@@ -232,17 +274,121 @@ with tab_trend:
                             st.caption("※ ギリシア語形の直接一致なし（英語概念ヒットのみ）")
                             
                     render_citation_list(hits, title_prefix="検索ヒット")
+                    # Save analysis to sidebar history
+                    title = f"{query} ({len(hits)} hits)"
+                    st.session_state.analysis_history.append(
+                        {
+                            "title": title,
+                            "query": query,
+                            "hits": hits,
+                            "trend": df_trend,
+                            "pie": df_pie,
+                            "search_stems": search_stems,
+                        }
+                    )
                 else:
                     st.warning("該当データなし")
 
+    # Show selected analysis from sidebar
+    if st.session_state.get("analysis_selected"):
+        sel = st.session_state["analysis_selected"]
+        st.info(f"🔁 過去の分析: {sel.get('title')}")
+        if sel.get("trend") is not None and not sel["trend"].empty:
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.markdown(f"#### 📈 年代推移 (Hit: {len(sel.get('hits', []))})")
+                fig_line = px.line(sel["trend"], x="Year", y="Frequency", title=f"Trend: {sel.get('query')}")
+                st.plotly_chart(fig_line, use_container_width=True)
+            with col2:
+                st.markdown("#### 🍰 語形出現比率 (正規化後)")
+                if sel.get("pie") is not None and not sel["pie"].empty:
+                    fig_pie = px.pie(sel["pie"], values="Count", names="Form", title=f"Variations of '{sel.get('query')}'")
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.caption("※ ギリシア語形の直接一致なし（英語概念ヒットのみ）")
+            render_citation_list(sel.get("hits", []), title_prefix="検索ヒット")
+
 # === Tab 2: チャット機能 (アップデート版) ===
 with tab_chat:
-    st.subheader("Evidence-Based Chat")
+    st.subheader("碑文チャット")
+
+    st.markdown(
+        """
+        <style>
+        /* Chat input fixed at bottom */
+        div[data-testid="stChatInput"] {
+            position: fixed;
+            bottom: 0;
+            left: 360px;
+            right: 0;
+            z-index: 1000;
+            padding: 1rem 1rem 1.25rem;
+            width: calc(100% - 360px);
+            background: linear-gradient(180deg, rgba(14,14,18,0) 0%, rgba(14,14,18,0.85) 35%, rgba(14,14,18,1) 100%);
+        }
+        /* Shift input to align with main content width */
+        @media (max-width: 1200px) {
+            div[data-testid="stChatInput"] {
+                left: 0;
+                width: 100%;
+            }
+        }
+        /* Make the input area larger, Gemini-like */
+        div[data-testid="stChatInput"] textarea {
+            min-height: 72px;
+            font-size: 1rem;
+            line-height: 1.4;
+        }
+        div[data-testid="stChatInput"] input {
+            min-height: 56px;
+            font-size: 1rem;
+        }
+        /* Keep input aligned with main content (avoid sidebar overlap) */
+        div[data-testid="stChatInput"] > div {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        /* Align user messages to the right (Gemini-like) */
+        div[data-testid="stChatMessage"][data-testid="stChatMessage-user"] {
+            display: flex;
+            justify-content: flex-end;
+        }
+        div[data-testid="stChatMessage"][data-testid="stChatMessage-user"] > div {
+            display: flex;
+            justify-content: flex-end;
+        }
+        div[data-testid="stChatMessage"][data-testid="stChatMessage-user"] [data-testid="stMarkdownContainer"] {
+            display: inline-block;
+            text-align: left;
+            margin-left: auto;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 18px;
+            padding: 0.6rem 0.9rem;
+            max-width: 75%;
+        }
+        /* Assistant messages remain left-aligned */
+        div[data-testid="stChatMessage"][data-testid="stChatMessage-assistant"] [data-testid="stMarkdownContainer"] {
+            max-width: 80%;
+        }
+        /* Keep content above fixed input */
+        .block-container {
+            padding-bottom: 8.5rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     
     if "history" not in st.session_state: st.session_state.history = []
     
     for m in st.session_state.history:
         st.chat_message(m["role"]).write(m["content"])
+        if m.get("role") == "assistant" and m.get("refs"):
+            with st.expander("🔍 参照エビデンス"):
+                render_citation_list(m["refs"], title_prefix="参照データ")
     
     if p := st.chat_input("質問を入力"):
         st.session_state.history.append({"role": "user", "content": p})
@@ -298,7 +444,31 @@ with tab_chat:
             ans = ans_res.choices[0].message.content
             
         st.chat_message("assistant").write(ans)
-        st.session_state.history.append({"role": "assistant", "content": ans})
+        st.session_state.history.append(
+            {"role": "assistant", "content": ans, "refs": ref_data}
+        )
+
+        # Save conversation summary into sidebar list
+        summary_title = p[:24] + ("…" if len(p) > 24 else "")
+        if st.session_state.active_conversation is None:
+            conv_id = f"conv_{len(st.session_state.conversations)+1}"
+            st.session_state.conversations.append(
+                {
+                    "id": conv_id,
+                    "title": summary_title,
+                    "messages": st.session_state.history.copy(),
+                    "refs": ref_data,
+                }
+            )
+            st.session_state.active_conversation = conv_id
+        else:
+            for conv in st.session_state.conversations:
+                if conv.get("id") == st.session_state.active_conversation:
+                    conv["messages"] = st.session_state.history.copy()
+                    conv["refs"] = ref_data
+                    if conv.get("title", "") == "":
+                        conv["title"] = summary_title
+                    break
         
         # ユーザーに「どんな言葉で検索したか」を見せる（透明性）
         with st.expander("🔍 AIの検索戦略 & 参照エビデンス"):
