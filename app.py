@@ -1,1024 +1,261 @@
+import streamlit as st
 import json
 import os
-import re
-import unicodedata
-from difflib import SequenceMatcher
-from collections import defaultdict
-from typing import Dict, List, Tuple
-
+import pandas as pd
 import plotly.express as px
-import streamlit as st
+import chromadb
+from openai import OpenAI
 from dotenv import load_dotenv
+from collections import defaultdict
+import re
 
-try:
-    from openai import OpenAI
-except Exception:  # pragma: no cover - optional dependency at runtime
-    OpenAI = None
-try:
-    import chromadb
-except Exception:  # pragma: no cover - optional dependency at runtime
-    chromadb = None
+# --- 基本設定 ---
+load_dotenv()
+st.set_page_config(page_title="Egyptian Greek Inscription Analyzer", layout="wide")
+CHROMA_PATH = "./chroma_db_store"
+DATA_FILE = "egypt_data_enriched.json"
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# --- データロード (キャッシュ) ---
+@st.cache_resource
+def get_chroma_db():
+    if not os.path.exists(CHROMA_PATH): return None
+    return chromadb.PersistentClient(path=CHROMA_PATH).get_collection("inscriptions")
 
-DATA_PATH = "egypt_processed_tagged.json"
-MODEL_NAME = "gpt-4o-mini"
-EMBED_MODEL = "text-embedding-3-small"
-CHROMA_DIR = ".chroma"
-CHROMA_COLLECTION = "inscriptions"
-TRANSLATE_MODEL = "gpt-4o"
-CHAT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
-EXPANSION_CACHE_PATH = ".cache/greek_expansion.json"
-
-
-def _get_api_key() -> str:
-    load_dotenv()
-    return os.getenv("OPENAI_API_KEY", "").strip()
-
-
-@st.cache_data(show_spinner=False)
-def load_data() -> List[Dict]:
-    with open(DATA_PATH, "r", encoding="utf-8") as f:
+@st.cache_data
+def load_json_data():
+    if not os.path.exists(DATA_FILE): return []
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
+# --- ① UIコンポーネント: 出典リスト表示 ---
+def render_citation_list(inscriptions, max_items=20, title_prefix="ヒットした碑文"):
+    """
+    IDと年代をリスト表示し、クリックで原文（折り返し）と英訳を表示する共通関数
+    """
+    st.markdown(f"### 📜 {title_prefix} (Top {min(len(inscriptions), max_items)})")
+    
+    for item in inscriptions[:max_items]:
+        # ヘッダー部分
+        label = f"**ID: {item['id']}** | Date: {item.get('date_min')} ~ {item.get('date_max')} | {item.get('region_sub', 'Unknown')}"
+        
+        with st.expander(label):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Original Greek:**")
+                # ギリシア語を折り返して表示するためにmarkdownを使用
+                st.markdown(f"<div style='word-wrap: break-word;'>{item['text']}</div>", unsafe_allow_html=True)
+            with col2:
+                st.markdown("**English Translation:**")
+                st.write(item.get('english_translation', '(No translation)'))
 
-def _safe_int(value) -> int | None:
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
-def generate_greek_keywords(user_query: str) -> Dict[str, List[str]]:
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing in .env")
-    if OpenAI is None:
-        raise RuntimeError("openai package is not available")
-
-    client = OpenAI(api_key=api_key)
-    system_prompt = (
-        "You are a philologist. Given a short Japanese query about ancient inscriptions, "
-        "return ONLY valid JSON with keys: expanded_greek, english_concepts. "
-        "expanded_greek must include relevant Ancient Greek lemmas and major inflections. "
-        "english_concepts should be short English concepts to broaden search."
-    )
-    user_prompt = f"Japanese query: {user_query}"
-
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.2,
-    )
-    content = response.choices[0].message.content or "{}"
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        data = {"expanded_greek": [], "english_concepts": []}
-    if "expanded_greek" not in data or "english_concepts" not in data:
-        data = {"expanded_greek": data.get("expanded_greek", []), "english_concepts": data.get("english_concepts", [])}
-    return data
-
-
-def _build_regex(terms: List[str]) -> re.Pattern:
-    escaped = [re.escape(t) for t in terms if t]
-    if not escaped:
-        return re.compile(r"a^")  # match nothing
-    pattern = "(" + "|".join(escaped) + ")"
-    return re.compile(pattern, flags=re.IGNORECASE)
-
-
-def _strip_diacritics(text: str) -> str:
-    decomposed = unicodedata.normalize("NFD", text)
-    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
-
-
-def _expand_terms_for_regex(terms: List[str]) -> List[str]:
-    tokens: List[str] = []
-    for t in terms:
-        parts = [p for p in re.split(r"[\s,/;:()\\[\\]{}]+", t) if p]
-        tokens.extend(parts)
-    return list(dict.fromkeys(tokens))
-
-
-def search_inscriptions(data: List[Dict], greek_terms: List[str]) -> List[Dict]:
-    rx = _build_regex(greek_terms)
-    results = []
-    for item in data:
-        text = str(item.get("text", ""))
-        if rx.search(text):
-            results.append(item)
-    return results
-
-
-def search_inscriptions_text(
-    data: List[Dict], terms: List[str], year_range: Tuple[int, int] | None = None
-) -> List[Tuple[Dict, float]]:
-    expanded_terms = _expand_terms_for_regex(terms)
-    rx = _build_regex(expanded_terms)
-    norm_terms = [_strip_diacritics(t) for t in expanded_terms]
-    rx_norm = _build_regex(norm_terms)
-    results: List[Tuple[Dict, float]] = []
-    for item in data:
-        dmin = _safe_int(item.get("date_min"))
-        dmax = _safe_int(item.get("date_max"))
-        if year_range is not None and dmin is not None and dmax is not None:
-            start, end = year_range
-            if not (dmin <= end and dmax >= start):
-                continue
-
-        text = str(item.get("text", ""))
-        lemmas = item.get("lemmas", [])
-        keywords = item.get("keywords", [])
-        hay = " ".join(
-            [
-                text,
-                " ".join(str(x) for x in lemmas) if isinstance(lemmas, list) else str(lemmas),
-                " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
-            ]
-        )
-        hay_norm = _strip_diacritics(hay)
-        matches = len(rx.findall(hay)) + len(rx_norm.findall(hay_norm))
-        if matches > 0:
-            results.append((item, float(matches)))
-    return results
-
-
-def _tokenize_hay(item: Dict) -> List[str]:
-    text = str(item.get("text", ""))
-    lemmas = item.get("lemmas", [])
-    keywords = item.get("keywords", [])
-    hay = " ".join(
-        [
-            text,
-            " ".join(str(x) for x in lemmas) if isinstance(lemmas, list) else str(lemmas),
-            " ".join(str(x) for x in keywords) if isinstance(keywords, list) else str(keywords),
-        ]
-    )
-    hay_norm = _strip_diacritics(hay)
-    return [t for t in re.split(r"[^\w]+", hay_norm) if t]
-
-
-def fuzzy_search_inscriptions(
-    data: List[Dict], terms: List[str], top_k: int = 20
-) -> List[Tuple[Dict, float]]:
-    term_tokens = []
-    for t in terms:
-        term_tokens.extend([p for p in re.split(r"[^\w]+", _strip_diacritics(t)) if p])
-    term_tokens = list(dict.fromkeys([t for t in term_tokens if len(t) >= 3]))
-    if not term_tokens:
-        return []
-
-    scored: List[Tuple[Dict, float]] = []
-    for item in data:
-        hay_tokens = _tokenize_hay(item)
-        if not hay_tokens:
-            continue
-        best = 0.0
-        for q in term_tokens:
-            for h in hay_tokens:
-                ratio = SequenceMatcher(None, q, h).ratio()
-                if ratio > best:
-                    best = ratio
-                if best >= 0.92:
-                    break
-            if best >= 0.92:
-                break
-        if best >= 0.75:
-            scored.append((item, best))
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:top_k]
-
-
-def _year_range(date_min: int, date_max: int) -> Tuple[int, int]:
-    if date_min is None or date_max is None:
-        return None, None
-    if date_min > date_max:
-        date_min, date_max = date_max, date_min
-    return date_min, date_max
-
-
-def build_year_counts(items: List[Dict]) -> Dict[int, float]:
-    counts: Dict[int, float] = defaultdict(float)
-    for item in items:
-        dmin = _safe_int(item.get("date_min"))
-        dmax = _safe_int(item.get("date_max"))
-        dmin, dmax = _year_range(dmin, dmax)
-        if dmin is None or dmax is None:
-            continue
-        span = dmax - dmin + 1
-        if span <= 0:
-            continue
-        weight = 1.0 / span
-        for y in range(dmin, dmax + 1):
-            counts[y] += weight
-    return counts
-
-
-@st.cache_data(show_spinner=False)
-def build_total_year_counts(data: List[Dict]) -> Dict[int, float]:
-    return build_year_counts(data)
-
-
-def make_trend_df(match_counts: Dict[int, float], total_counts: Dict[int, float], normalize: bool):
-    years = sorted(set(match_counts.keys()) | set(total_counts.keys()))
-    rows = []
-    for y in years:
-        m = match_counts.get(y, 0.0)
-        t = total_counts.get(y, 0.0)
-        if normalize:
-            value = m / t if t > 0 else 0.0
-        else:
-            value = m
-        rows.append({"year": y, "value": value, "matched": m, "total": t})
-    return rows
-
-
-def build_context(items: List[Dict], max_items: int = 20) -> str:
-    chunks = []
-    for item in items[:max_items]:
-        _id = item.get("id", "unknown")
-        text = item.get("text", "")
-        dmin = item.get("date_min", "")
-        dmax = item.get("date_max", "")
-        region = item.get("region", "")
-        chunks.append(
-            f"[ID: {_id}] Date: {dmin}–{dmax}; Region: {region}\nText: {text}"
-        )
-    return "\n\n".join(chunks)
-
-
-@st.cache_data(show_spinner=False)
-def get_date_bounds(data: List[Dict]) -> Tuple[int, int]:
-    mins = []
-    maxs = []
-    for item in data:
-        dmin = _safe_int(item.get("date_min"))
-        dmax = _safe_int(item.get("date_max"))
-        if dmin is not None:
-            mins.append(dmin)
-        if dmax is not None:
-            maxs.append(dmax)
-    if not mins or not maxs:
-        return -3000, 1000
-    return min(mins), max(maxs)
-
-
-def count_in_range(data: List[Dict], year_range: Tuple[int, int]) -> int:
-    start, end = year_range
-    count = 0
-    for item in data:
-        dmin = _safe_int(item.get("date_min"))
-        dmax = _safe_int(item.get("date_max"))
-        if dmin is None or dmax is None:
-            continue
-        if dmin <= end and dmax >= start:
-            count += 1
-    return count
-
-
-def run_rag_chat(
-    context: str,
-    user_message: str,
-    allow_background: bool,
-    answer_len: int,
-    chat_model: str,
-) -> str:
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing in .env")
-    if OpenAI is None:
-        raise RuntimeError("openai package is not available")
-    client = OpenAI(api_key=api_key)
-
-    length_hint = {
-        1: "Respond in 1-2 short sentences.",
-        2: "Respond in a short paragraph (3-4 sentences).",
-        3: "Respond in a medium-length answer (5-7 sentences).",
-        4: "Respond in a detailed answer (8-12 sentences).",
-        5: "Respond in a very detailed answer with structured paragraphs.",
-    }.get(answer_len, "Respond in a medium-length answer (5-7 sentences).")
-
-    if allow_background:
-        system_prompt = (
-            "You are a careful scholar. Use the provided inscriptions context first. "
-            "You may add general historical background knowledge if it is clearly marked as such. "
-            "Rules: "
-            "1) For statements grounded in inscriptions, cite evidence after each statement in the format [ID: 12345]. "
-            "2) For statements from general knowledge, prefix the sentence with '背景知識:' and do NOT cite inscription IDs. "
-            "3) Do not fabricate inscription content. If the context is insufficient, say so explicitly."
-            f" {length_hint}"
-        )
-    else:
-        system_prompt = (
-            "You are a careful scholar. Answer ONLY from the provided inscriptions context. "
-            "After each factual statement, cite evidence in the format [ID: 12345]. "
-            "If the context is insufficient, say so explicitly and do not speculate."
-            f" {length_hint}"
-        )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_message}"},
-    ]
-    response = client.chat.completions.create(
-        model=chat_model or MODEL_NAME,
-        messages=messages,
-        temperature=0.2,
-    )
-    return response.choices[0].message.content or ""
-
-
-def build_translation_context(items: List[Tuple[Dict, float]], top_n: int) -> str:
-    if top_n <= 0:
-        return ""
-    parts = []
-    for item, _score in items[:top_n]:
-        _id = item.get("id", "unknown")
-        text = str(item.get("text", ""))
-        try:
-            jp = translate_to_japanese(text)
-        except Exception:
-            jp = ""
-        parts.append(f"[ID: {_id}] Japanese Translation:\n{jp}\nOriginal:\n{text}")
-    return "\n\n".join(p for p in parts if p)
-
-
-def translate_to_japanese(text: str) -> str:
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing in .env")
-    if OpenAI is None:
-        raise RuntimeError("openai package is not available")
-    client = OpenAI(api_key=api_key)
-    system_prompt = (
-        "You are a skilled translator of Ancient Greek inscriptions. "
-        "Provide a natural, readable Japanese translation while staying faithful to the text. "
-        "Rules: "
-        "1) Preserve proper names and technical terms; use standard scholarly transliterations. "
-        "2) If a segment is unclear, mark with （不明） or （不確実）. "
-        "3) Keep line order if possible, but prioritize readability. "
-        "Return ONLY the Japanese translation, no extra commentary."
-    )
-    response = client.chat.completions.create(
-        model=TRANSLATE_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ],
-        temperature=0.0,
-    )
-    return response.choices[0].message.content or ""
-
-
-GREEK_DICTIONARY = {
-    "ゼウス": ["ζευς", "διος", "διι", "δια", "ζην"],
-    "エレウテριオス": ["ελευθεριος", "ελευθεριου", "ελευθεριῳ", "ελευθεριον"],
-    "アポロン": ["απολλων", "απολλωνος", "απολλωνι", "απολλωνα"],
-    "アルテミス": ["αρτεμις", "αρτεμιδος", "αρτεμιδι", "αρτεμιν"],
-    "アテナ": ["αθηνα", "αθηνας", "αθηναι", "αθηνᾳ"],
-    "ヘルメス": ["ερμης", "ερμου", "ερμῃ", "ερμην"],
-    "ヘラクレス": ["ηρακλεης", "ηρακλεους", "ηρακλει", "ηρακλεα"],
-    "ヘラ": ["ηρα", "ηρας", "ηρᾳ", "ηραν"],
-    "アフロディテ": ["αφροδιτη", "αφροδιτης", "αφροδιτῃ", "αφροδιτην"],
-    "デメテル": ["δημητηρ", "δημητρος", "δημητρι", "δημητρα"],
-    "サラピス": ["σαραπις", "σαραπιδος", "σαραπιδι", "σαραπιν"],
-    "イシス": ["ισις", "ισιδος", "ισιδι", "ισιν"],
-    "オシリス": ["οσιρις", "οσιριδος", "οσιριδι", "οσιριν"],
-    "ホルス": ["ωρος", "ωρου", "ωρῳ", "ωρον"],
-    "アヌビス": ["ανουβις", "ανουβιος", "ανουβι", "ανουβιν"],
-    "セラピオン": ["σεραπιων", "σεραπιωνος", "σεραπιωνι", "σεραπιωνα"],
-}
-
-
-def expand_query_for_search(user_query: str) -> List[str]:
-    # Build multiple query variants (JP -> EN/Greek) to improve recall.
-    api_key = _get_api_key()
-    if not api_key or OpenAI is None:
-        return [user_query]
-
-    client = OpenAI(api_key=api_key)
-    system_prompt = (
-        "You are a search assistant for ancient inscriptions. "
-        "Return ONLY JSON with keys: english_query, greek_keywords. "
-        "english_query: a short English paraphrase of the user query. "
-        "greek_keywords: a short list of relevant Ancient Greek lemmas or terms, "
-        "including common inflected forms when applicable."
-    )
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query},
-            ],
-            temperature=0.2,
-        )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
-        english_query = str(data.get("english_query", "")).strip()
-        greek_keywords = data.get("greek_keywords", [])
-        if isinstance(greek_keywords, list):
-            greek_text = " ".join(str(x) for x in greek_keywords)
-        else:
-            greek_text = str(greek_keywords)
-        queries = [user_query]
-        if english_query:
-            queries.append(english_query)
-        if greek_text.strip():
-            expanded = expand_greek_inflections(greek_text)
-            queries.append(" ".join(expanded))
-        # If query is Japanese and name-like, add common Greek inflections for Ptolemaios-like names
-        if "プトレマイオス" in user_query and "πτολεμα" not in greek_text:
-            queries.append("πτολεμαιος πτολεμαιου πτολεμαιῳ πτολεμαιον πτολεμαιε")
-        # Dictionary-based expansion for common deities/titles
-        for jp, forms in GREEK_DICTIONARY.items():
-            if jp in user_query:
-                queries.append(" ".join(forms))
-        # AI expansion fallback with caching
-        cached = load_expansion_cache()
-        if user_query in cached:
-            queries.append(" ".join(cached[user_query]))
-        else:
-            ai_forms = ai_expand_terms(user_query)
-            if ai_forms:
-                cached[user_query] = ai_forms
-                save_expansion_cache(cached)
-                queries.append(" ".join(ai_forms))
-        # If user typed Latin transliteration, add a naive Greek transliteration variant
-        latin_variant = translit_latin_to_greek(user_query)
-        if latin_variant and latin_variant != user_query:
-            queries.append(latin_variant)
-        return list(dict.fromkeys([q for q in queries if q]))
-    except Exception:
-        return [user_query]
-
-
-def _is_greek_token(token: str) -> bool:
-    return bool(re.search(r"[\u0370-\u03FF\u1F00-\u1FFF]", token))
-
-
-def translit_latin_to_greek(text: str) -> str:
-    s = text.lower()
-    # Common digraphs
-    replacements = [
-        ("ph", "φ"),
-        ("ch", "χ"),
-        ("th", "θ"),
-        ("ps", "ψ"),
-        ("ks", "ξ"),
-        ("x", "ξ"),
-        ("ou", "ου"),
-        ("eu", "ευ"),
-        ("ei", "ει"),
-        ("oi", "οι"),
-        ("ai", "αι"),
-    ]
-    for a, b in replacements:
-        s = s.replace(a, b)
-    mapping = {
-        "a": "α",
-        "b": "β",
-        "g": "γ",
-        "d": "δ",
-        "e": "ε",
-        "z": "ζ",
-        "h": "η",
-        "i": "ι",
-        "k": "κ",
-        "l": "λ",
-        "m": "μ",
-        "n": "ν",
-        "o": "ο",
-        "p": "π",
-        "r": "ρ",
-        "s": "σ",
-        "t": "τ",
-        "u": "υ",
-        "y": "υ",
-        "w": "ω",
+# --- ② ロジック: AIによるクエリ拡張 (修正版) ---
+def get_smart_search_terms(user_query):
+    """
+    ユーザーの入力から、検索に必要な「英語概念」と「ギリシア語の全変化形」を生成する
+    """
+    system_prompt = """
+    You are an expert Ancient Greek Historian.
+    Analyze the user's query and return a JSON object with two lists.
+    
+    IMPORTANT: You must generate ACTUAL GREEK WORDS, not placeholders.
+    
+    Example Input: "καισαρ"
+    Example Output:
+    {
+      "greek_forms": ["καισαρ", "καισαρος", "καισαρι", "καισαρα", "καισαρων", "καισαρσι"],
+      "english_keywords": ["Caesar", "Emperor", "Imperial"]
     }
-    out = []
-    for ch in s:
-        if ch in mapping:
-            out.append(mapping[ch])
-        elif ch.isspace():
-            out.append(" ")
-    result = "".join(out).strip()
-    return result
 
-
-def expand_greek_inflections(text: str) -> List[str]:
-    terms = [t.strip() for t in re.split(r"[,\s]+", text) if t.strip()]
-    expanded = set(terms)
-    for t in terms:
-        if not _is_greek_token(t):
-            continue
-        base = _strip_diacritics(t)
-        expanded.add(base)
-        # Basic 2nd declension patterns (-ος)
-        if base.endswith("ος"):
-            stem = base[:-2]
-            expanded.update(
-                [
-                    base,
-                    stem + "ου",
-                    stem + "ῳ",
-                    stem + "ον",
-                    stem + "ε",
-                    stem + "οι",
-                    stem + "ους",
-                    stem + "ων",
-                ]
-            )
-        # Basic 1st declension (-ας)
-        elif base.endswith("ας"):
-            stem = base[:-2]
-            expanded.update(
-                [
-                    base,
-                    stem + "α",
-                    stem + "ᾳ",
-                    stem + "αν",
-                    stem + "αι",
-                    stem + "ας",
-                    stem + "ων",
-                ]
-            )
-        # Basic 1st declension (-ης)
-        elif base.endswith("ης"):
-            stem = base[:-2]
-            expanded.update(
-                [
-                    base,
-                    stem + "ου",
-                    stem + "ῃ",
-                    stem + "ην",
-                    stem + "αι",
-                    stem + "ας",
-                    stem + "ων",
-                ]
-            )
-        # Names like καισαρ -> καισαρος, καισαρι, καισαρα
-        elif base.endswith("ρ"):
-            expanded.update([base, base + "ος", base + "ι", base + "α"])
-    return list(expanded)
-
-
-def load_expansion_cache() -> Dict[str, List[str]]:
-    if not os.path.exists(EXPANSION_CACHE_PATH):
-        return {}
+    Task:
+    1. "greek_forms": List the lemma AND ALL inflected forms (nom/gen/dat/acc, sg/pl).
+    2. "english_keywords": English translations and related concepts.
+    """
+    
     try:
-        with open(EXPANSION_CACHE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_expansion_cache(cache: Dict[str, List[str]]):
-    os.makedirs(os.path.dirname(EXPANSION_CACHE_PATH), exist_ok=True)
-    with open(EXPANSION_CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
-
-
-def ai_expand_terms(user_query: str) -> List[str]:
-    api_key = _get_api_key()
-    if not api_key or OpenAI is None:
-        return []
-    client = OpenAI(api_key=api_key)
-    system_prompt = (
-        "You are a philologist. Given a Japanese query, return ONLY JSON with key 'greek_forms' "
-        "containing a list of relevant Ancient Greek lemmas and inflected forms. "
-        "Return Greek forms only."
-    )
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query},
+                {"role": "user", "content": user_query}
             ],
-            temperature=0.2,
+            response_format={"type": "json_object"},
+            temperature=0.1 # 創造性を下げて確実に答えさせる
         )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
-        forms = data.get("greek_forms", [])
-        if isinstance(forms, list):
-            return [str(x) for x in forms if str(x).strip()]
-    except Exception:
-        return []
-    return []
+        result = json.loads(res.choices[0].message.content)
+        
+        # 【保険】もしAIが入力した単語そのものを忘れていたら追加する
+        if user_query not in result.get('greek_forms', []):
+            result.setdefault('greek_forms', []).append(user_query)
+            
+        return result
+    except:
+        # エラー時は入力そのものを返す
+        return {"greek_forms": [user_query], "english_keywords": [user_query]}
 
+# --- ③ ロジック: 詳細検索 & 集計 ---
+def analyze_data(data, search_terms):
+    """
+    全データを走査し、以下の3つを計算する
+    1. 年代推移 (Line Chart用)
+    2. 語形ごとのヒット数 (Pie Chart用)
+    3. ヒットした碑文リスト
+    """
+    years_map = defaultdict(float)
+    form_counts = defaultdict(int)
+    matched_items = []
+    
+    # 検索語の準備
+    greek_targets = [t for t in search_terms.get('greek_forms', []) if t]
+    english_targets = [t.lower() for t in search_terms.get('english_keywords', []) if t]
+    
+    for d in data:
+        is_hit = False
+        text_greek = d['text'] # Case sensitive for Greek usually, but let's keep original
+        text_eng = d.get('english_translation', '').lower()
+        
+        # A. ギリシア語形のマッチング（円グラフ用）
+        # 正規表現を使わず、単純な包含確認を行う（高速化のため）
+        for g_form in greek_targets:
+            if g_form in text_greek:
+                form_counts[g_form] += 1
+                is_hit = True
+        
+        # B. 英語概念のマッチング（ヒット漏れ防止用）
+        if not is_hit:
+            for e_word in english_targets:
+                if e_word in text_eng:
+                    is_hit = True
+                    break
+        
+        # ヒットした場合の年代集計
+        if is_hit:
+            matched_items.append(d)
+            s, e = int(d.get('date_min', 0)), int(d.get('date_max', 0))
+            if s == 0 and e == 0: continue
+            
+            duration = e - s + 1
+            weight = 1.0 / duration if duration > 0 else 1.0
+            for y in range(s, e + 1):
+                years_map[y] += weight
+                
+    # データフレーム変換
+    df_trend = pd.DataFrame(list(years_map.items()), columns=["Year", "Frequency"]).sort_values("Year")
+    df_pie = pd.DataFrame(list(form_counts.items()), columns=["Form", "Count"]).sort_values("Count", ascending=False)
+    
+    return df_trend, df_pie, matched_items
 
-def _truncate_text(text: str, max_chars: int = 4000) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars]
+# --- メイン UI ---
+st.title("🏛️ Egyptian Greek Inscription Analyzer")
+st.caption("Morphological Analysis & AI Historian")
 
+collection = get_chroma_db()
+full_data = load_json_data()
 
-def _embed_texts(texts: List[str]) -> List[List[float]]:
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing in .env")
-    if OpenAI is None:
-        raise RuntimeError("openai package is not available")
+if collection is None:
+    st.error("データベースが見つかりません。Step 2 を実行してください。")
+    st.stop()
 
-    client = OpenAI(api_key=api_key)
-    embeddings: List[List[float]] = []
-    batch_size = 25
-    for i in range(0, len(texts), batch_size):
-        batch = [_truncate_text(t) for t in texts[i : i + batch_size]]
-        resp = client.embeddings.create(model=EMBED_MODEL, input=batch)
-        embeddings.extend([e.embedding for e in resp.data])
-    return embeddings
+tab_trend, tab_chat = st.tabs(["📊 年代推移・語形分析", "🤖 歴史家チャット"])
 
-
-def _build_embedding_text(item: Dict) -> str:
-    text = str(item.get("text", ""))
-    lemmas = item.get("lemmas", [])
-    keywords = item.get("keywords", [])
-    parts = [text]
-    if isinstance(lemmas, list):
-        parts.append(" ".join(str(x) for x in lemmas))
-    else:
-        parts.append(str(lemmas))
-    if isinstance(keywords, list):
-        parts.append(" ".join(str(x) for x in keywords))
-    else:
-        parts.append(str(keywords))
-    return "\n".join(p for p in parts if p)
-
-
-def _get_chroma_collection():
-    if chromadb is None:
-        raise RuntimeError("chromadb package is not available")
-    os.makedirs(CHROMA_DIR, exist_ok=True)
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return client.get_or_create_collection(CHROMA_COLLECTION)
-
-
-def _needs_rebuild(collection) -> bool:
-    try:
-        peek = collection.get(limit=1, include=["metadatas"])
-        metas = peek.get("metadatas", [[]])[0]
-        if not metas:
-            return True
-        meta = metas[0]
-        return "date_min" not in meta or "date_max" not in meta
-    except Exception:
-        return True
-
-
-def build_chroma_index(data: List[Dict]):
-    collection = _get_chroma_collection()
-    existing = collection.count()
-    if existing == len(data) and not _needs_rebuild(collection):
-        return collection
-
-    # Rebuild if counts don't match
-    try:
-        collection.delete(where={})
-    except Exception:
-        pass
-
-    texts = [_build_embedding_text(item) for item in data]
-    embeddings = _embed_texts(texts)
-    ids = [str(item.get("id", idx)) for idx, item in enumerate(data)]
-    metadatas = []
-    for idx, item in enumerate(data):
-        metadatas.append(
-            {
-                "idx": idx,
-                "date_min": _safe_int(item.get("date_min")),
-                "date_max": _safe_int(item.get("date_max")),
-            }
-        )
-
-    batch_size = 1000
-    for i in range(0, len(data), batch_size):
-        collection.add(
-            ids=ids[i : i + batch_size],
-            embeddings=embeddings[i : i + batch_size],
-            metadatas=metadatas[i : i + batch_size],
-            documents=texts[i : i + batch_size],
-        )
-    return collection
-
-
-def chroma_query(
-    data: List[Dict],
-    collection,
-    query: str,
-    top_k: int,
-    date_range: Tuple[int, int] | None = None,
-) -> List[Tuple[Dict, float]]:
-    query_emb = _embed_texts([query])[0]
-    where = None
-    if date_range is not None:
-        start, end = date_range
-        where = {"$and": [{"date_min": {"$lte": end}}, {"date_max": {"$gte": start}}]}
-    res = collection.query(
-        query_embeddings=[query_emb],
-        n_results=top_k,
-        include=["metadatas", "distances"],
-        where=where,
-    )
-    items: List[Tuple[Dict, float]] = []
-    metadatas = res.get("metadatas", [[]])[0]
-    distances = res.get("distances", [[]])[0]
-    for meta, dist in zip(metadatas, distances):
-        idx = meta.get("idx")
-        if idx is None:
-            continue
-        score = 1.0 / (1.0 + float(dist))
-        items.append((data[int(idx)], score))
-    return items
-
-
-def multi_query_retrieve(
-    data: List[Dict],
-    collection,
-    queries: List[str],
-    top_k: int,
-    date_range: Tuple[int, int] | None = None,
-) -> List[Tuple[Dict, float]]:
-    merged: Dict[str, Tuple[Dict, float]] = {}
-    for q in queries:
-        results = chroma_query(data, collection, q, top_k, date_range)
-        for item, score in results:
-            _id = str(item.get("id", "unknown"))
-            if _id not in merged or score > merged[_id][1]:
-                merged[_id] = (item, score)
-    ordered = sorted(merged.values(), key=lambda x: x[1], reverse=True)
-    return ordered[:top_k]
-
-
-def hybrid_retrieve(
-    data: List[Dict],
-    collection,
-    queries: List[str],
-    top_k: int,
-    date_range: Tuple[int, int] | None = None,
-    alpha: float = 0.7,
-) -> List[Tuple[Dict, float]]:
-    vec = multi_query_retrieve(data, collection, queries, top_k, date_range)
-    text = search_inscriptions_text(data, queries, year_range=date_range)
-
-    vec_map: Dict[str, Tuple[Dict, float]] = {str(item.get("id", "unknown")): (item, score) for item, score in vec}
-    if text:
-        max_text = max(score for _, score in text) or 1.0
-    else:
-        max_text = 1.0
-    text_map: Dict[str, Tuple[Dict, float]] = {}
-    for item, score in text:
-        _id = str(item.get("id", "unknown"))
-        text_map[_id] = (item, score / max_text)
-
-    merged: Dict[str, Tuple[Dict, float]] = {}
-    ids = set(vec_map.keys()) | set(text_map.keys())
-    for _id in ids:
-        item = vec_map.get(_id, text_map.get(_id))[0]
-        v = vec_map.get(_id, (item, 0.0))[1]
-        t = text_map.get(_id, (item, 0.0))[1]
-        score = alpha * v + (1.0 - alpha) * t
-        merged[_id] = (item, score)
-
-    ordered = sorted(merged.values(), key=lambda x: x[1], reverse=True)
-    return ordered[:top_k]
-
-
-def render_related_inscriptions(items: List[Tuple[Dict, float]]):
-    st.subheader("関連する可能性のある碑文")
-    st.caption("質問に直接合致する碑文が少ないため、類似度の高い碑文を提示します。")
-    for item, score in items:
-        _id = item.get("id", "unknown")
-        header = f"[ID: {_id}] score={score:.3f} {item.get('region', '')} ({item.get('date_min', '')}–{item.get('date_max', '')})"
-        with st.expander(header):
-            st.write(item.get("text", ""))
-
-
-def main():
-    st.set_page_config(page_title="Egyptian Greek Inscription Analyzer", layout="wide")
-    st.title("Egyptian Greek Inscription Analyzer")
-
-    with st.status("Loading inscription data...", expanded=True) as status:
-        data = load_data()
-        status.update(label=f"Loaded {len(data):,} records.", state="complete")
-
-    st.markdown("**Prompt**: 古代エジプト碑文高度分析アプリの構築")
-
-    tab_trend, tab_chat = st.tabs(
-        ["ギリシア語の年代推移", "碑文ベースのチャット"]
-    )
-
-    with tab_trend:
-        st.header("ギリシア語の年代推移")
-        st.caption("ギリシア語の語形を入力して、年代ごとの出現頻度を可視化します。")
-
-        st.subheader("検索語 (ギリシア語)")
-        manual_terms = st.text_input(
-            "カンマ区切りで入力 (例: βασιλεύς, βασιλέως, βασιλεῖ)", ""
-        )
-        greek_terms = [t.strip() for t in manual_terms.split(",") if t.strip()]
-
-        normalize = st.checkbox("年代別総碑文数で正規化する", value=True, key="normalize_trend")
-        search_clicked = st.button("検索を実行", key="search_btn")
-
-        if "trend_results" not in st.session_state:
-            st.session_state.trend_results = []
-            st.session_state.trend_terms = []
-            st.session_state.trend_rows = []
-
-        if search_clicked:
-            if not greek_terms:
-                st.warning("ギリシア語語形が未入力です。クエリ拡張または手入力してください。")
-            else:
-                with st.status("Searching inscriptions...", expanded=True) as status:
-                    results = search_inscriptions(data, greek_terms)
-                    status.update(label=f"Found {len(results):,} inscriptions.", state="complete")
-
-                st.subheader("Trend Analysis (Uniform Distribution)")
-                with st.spinner("Calculating trend..."):
-                    match_counts = build_year_counts(results)
-                    total_counts = build_total_year_counts(data)
-                    rows = make_trend_df(match_counts, total_counts, normalize)
-
-                st.session_state.trend_results = results
-                st.session_state.trend_terms = greek_terms
-                st.session_state.trend_rows = rows
-
-        if st.session_state.trend_results:
-            fig = px.line(st.session_state.trend_rows, x="year", y="value", title="Temporal Trend")
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("Hit List")
-            for item in st.session_state.trend_results:
-                _id = str(item.get("id", "unknown"))
-                header = f"[ID: {_id}] {item.get('region', '')} ({item.get('date_min', '')}–{item.get('date_max', '')})"
-                translate_key = f"translate_{_id}"
-                cache_key = f"jp_translation_{_id}"
-                error_key = f"jp_translation_error_{_id}"
-                open_key = f"open_{_id}"
-
-                if "last_translated_id" not in st.session_state:
-                    st.session_state["last_translated_id"] = None
-                if cache_key not in st.session_state:
-                    st.session_state[cache_key] = ""
-                if error_key not in st.session_state:
-                    st.session_state[error_key] = ""
-                if open_key not in st.session_state:
-                    st.session_state[open_key] = False
-                if st.session_state[cache_key]:
-                    st.session_state[open_key] = True
-
-                open_now = st.checkbox(f"▼ {header}", value=st.session_state[open_key], key=f"toggle_{_id}")
-                st.session_state[open_key] = open_now
-                if open_now:
-                    if st.button("この碑文を日本語訳", key=translate_key):
-                        st.session_state[open_key] = True
-                        st.session_state["last_translated_id"] = _id
-                        st.session_state[error_key] = ""
-                        with st.spinner("日本語訳を生成中..."):
-                            try:
-                                st.session_state[cache_key] = translate_to_japanese(
-                                    str(item.get("text", ""))
-                                )
-                            except Exception as e:
-                                st.session_state[error_key] = str(e)
-
-                    st.json({"metadata": item.get("metadata")})
-
-                    if st.session_state[error_key]:
-                        st.error(st.session_state[error_key])
-
-                    if st.session_state[cache_key]:
-                        st.markdown("**日本語訳:**")
-                        st.write(st.session_state[cache_key])
-
-                    st.write(item.get("text", ""))
-
-    with tab_chat:
-        st.header("碑文ベースのチャット")
-        st.caption("回答は必ず [ID: 12345] の形式でエビデンスを付与します。")
-
-        st.subheader("埋め込み検索 (ChromaDB)")
-        st.caption("初回のみ全碑文の埋め込み作成が必要です。以後は高速検索できます。")
-        # 年代フィルタを一旦無効化（常に全件対象）
-        top_k = st.slider("参照する碑文数 (Top-K)", min_value=5, max_value=50, value=20)
-        min_score = st.slider("一致度しきい値", min_value=0.0, max_value=0.6, value=0.25, step=0.05)
-        build_clicked = st.button("ChromaDBを準備する", key="embed_build")
-        expand_query = st.checkbox("日本語クエリを拡張して検索精度を上げる", value=True)
-        use_hybrid = st.checkbox("ベクトル+文字列のハイブリッド検索", value=True)
-        alpha = st.slider("ベクトル寄りの重み", min_value=0.0, max_value=1.0, value=0.7, step=0.05)
-        allow_background = st.checkbox("背景知識モード（一般的な歴史知識も許可）", value=False)
-        answer_len = st.slider("回答の長さ", min_value=1, max_value=5, value=3)
-        chat_model = st.selectbox("チャットモデル", CHAT_MODELS, index=0)
-        translate_top_n = st.slider("重要碑文の自動翻訳数", min_value=0, max_value=5, value=2)
-
-        if "chroma_ready" not in st.session_state:
-            st.session_state.chroma_ready = False
-
-        if build_clicked or not st.session_state.chroma_ready:
-            with st.status("Building / loading ChromaDB index...", expanded=True) as status:
-                collection = build_chroma_index(data)
-                st.session_state.chroma_collection = collection
-                st.session_state.chroma_ready = True
-                status.update(label=f"ChromaDB ready: {collection.count():,}", state="complete")
-
-        if "chat_messages" not in st.session_state:
-            st.session_state.chat_messages = []
-
-        messages_box = st.container(height=420)
-        with messages_box:
-            for m in st.session_state.chat_messages:
-                with st.chat_message(m["role"]):
-                    st.write(m["content"])
-
-        user_message = st.chat_input("碑文に関する質問を入力")
-        if user_message:
-            st.session_state.chat_messages.append({"role": "user", "content": user_message})
-            with messages_box:
-                with st.chat_message("user"):
-                    st.write(user_message)
-
-            with st.spinner("埋め込み検索中..."):
-                if not st.session_state.chroma_ready:
-                    collection = build_chroma_index(data)
-                    st.session_state.chroma_collection = collection
-                    st.session_state.chroma_ready = True
-                queries = [user_message]
-                if expand_query:
-                    queries = expand_query_for_search(user_message)
-                if use_hybrid:
-                    retrieved_scored = hybrid_retrieve(
-                        data, st.session_state.chroma_collection, queries, top_k, None, alpha
-                    )
-                else:
-                    retrieved_scored = multi_query_retrieve(
-                        data, st.session_state.chroma_collection, queries, top_k, None
-                    )
-            retrieved = [item for item, _ in retrieved_scored]
-            context = build_context(retrieved, max_items=top_k)
-            translation_context = build_translation_context(retrieved_scored, translate_top_n)
-            if translation_context:
-                context = context + "\n\n[Japanese Translations]\n" + translation_context
-            if retrieved_scored and retrieved_scored[0][1] < min_score:
-                render_related_inscriptions(retrieved_scored[: min(top_k, 10)])
-            if not retrieved_scored:
-                # Fallback to pure text/lemma/keyword search when vector search returns nothing
-                fallback = search_inscriptions_text(data, queries)
-                if fallback:
-                    retrieved_scored = fallback[:top_k]
-                    retrieved = [item for item, _ in retrieved_scored]
-                    context = build_context(retrieved, max_items=top_k)
-                else:
-                    fuzzy = fuzzy_search_inscriptions(data, queries, top_k=top_k)
-                    if fuzzy:
-                        retrieved_scored = fuzzy
-                        retrieved = [item for item, _ in retrieved_scored]
-                        context = build_context(retrieved, max_items=top_k)
-                        st.info("厳密一致が見つからないため、語形が近い碑文を提示しています。")
+# === Tab 1: 年代推移 & 円グラフ ===
+with tab_trend:
+    st.subheader("概念・語形変化の分析")
+    query = st.text_input("検索語（例: καισαρ, プトレマイオス1世）", "καισαρ")
+    
+    if st.button("分析実行"):
+        with st.spinner("AIが語形変化を展開し、全碑文を解析中..."):
+            # 1. AI展開
+            expanded = get_smart_search_terms(query)
+            
+            # ユーザーへのフィードバック
+            with st.expander("🔍 AIが生成した検索ターゲット (クリックして確認)"):
+                st.write(f"**Greek Forms:** {', '.join(expanded.get('greek_forms', []))}")
+                st.write(f"**English Keywords:** {', '.join(expanded.get('english_keywords', []))}")
+            
+            # 2. 集計実行
+            df_trend, df_pie, hits = analyze_data(full_data, expanded)
+            
+            if not df_trend.empty:
+                # 3. グラフ表示
+                col_graph1, col_graph2 = st.columns([2, 1])
+                
+                with col_graph1:
+                    st.markdown("#### 📈 年代推移 (Frequency)")
+                    fig_line = px.line(df_trend, x="Year", y="Frequency", title=f"Trend: {query}")
+                    st.plotly_chart(fig_line, use_container_width=True)
+                
+                with col_graph2:
+                    st.markdown("#### 🍰 語形出現比率")
+                    if not df_pie.empty:
+                        fig_pie = px.pie(df_pie, values="Count", names="Form", title="Greek Forms Distribution")
+                        st.plotly_chart(fig_pie, use_container_width=True)
                     else:
-                        st.warning("対応する碑文が見つかりませんでした。検索語や条件を見直してください。")
-            st.subheader("参照した碑文リスト")
-            for item, score in retrieved_scored:
-                _id = str(item.get("id", "unknown"))
-                header = f"[ID: {_id}] score={score:.3f} {item.get('region', '')} ({item.get('date_min', '')}–{item.get('date_max', '')})"
-                with st.expander(header):
-                    chat_translate_key = f"chat_translate_{_id}"
-                    chat_cache_key = f"chat_jp_translation_{_id}"
-                    chat_error_key = f"chat_jp_translation_error_{_id}"
-                    if chat_cache_key not in st.session_state:
-                        st.session_state[chat_cache_key] = ""
-                    if chat_error_key not in st.session_state:
-                        st.session_state[chat_error_key] = ""
+                        st.info("ギリシア語形の直接一致はありませんでした（英語概念のみヒット）")
 
-                    if st.button("この碑文を日本語訳", key=chat_translate_key):
-                        st.session_state[chat_error_key] = ""
-                        with st.spinner("日本語訳を生成中..."):
-                            try:
-                                st.session_state[chat_cache_key] = translate_to_japanese(
-                                    str(item.get("text", ""))
-                                )
-                            except Exception as e:
-                                st.session_state[chat_error_key] = str(e)
+                # 4. 共通リスト形式で出典表示
+                render_citation_list(hits, title_prefix="分析対象となった碑文")
+                
+            else:
+                st.warning("該当するデータが見つかりませんでした。")
 
-                    if st.session_state[chat_error_key]:
-                        st.error(st.session_state[chat_error_key])
-
-                    if st.session_state[chat_cache_key]:
-                        st.markdown("**日本語訳:**")
-                        st.write(st.session_state[chat_cache_key])
-
-                    st.write(item.get("text", ""))
-            with messages_box:
-                with st.chat_message("assistant"):
-                    with st.spinner("回答生成中..."):
-                        answer = run_rag_chat(context, user_message, allow_background, answer_len, chat_model)
-                        st.write(answer)
-            st.session_state.chat_messages.append({"role": "assistant", "content": answer})
-
-
-if __name__ == "__main__":
-    main()
+# === Tab 2: AIチャット ===
+with tab_chat:
+    st.subheader("Evidence-Based Chat")
+    
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+        
+    for msg in st.session_state.chat_history:
+        st.chat_message(msg["role"]).write(msg["content"])
+        
+    if prompt := st.chat_input("質問を入力 (例: プトレマイオス1世の統治について)"):
+        st.chat_message("user").write(prompt)
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        
+        with st.spinner("AIが関連語を推論し、文献を検索中..."):
+            # 1. AI推論 (Step 1)
+            plan = get_smart_search_terms(prompt)
+            search_text = " ".join(plan.get('english_keywords', []) + plan.get('greek_forms', []))
+            
+            # 2. ベクトル検索 (Step 2)
+            # AIが考えた「ソテル」「ベレニケ」などの関連語も含めて検索
+            q_vec = client.embeddings.create(input=[search_text], model="text-embedding-3-small").data[0].embedding
+            results = collection.query(query_embeddings=[q_vec], n_results=20)
+            
+            # 3. コンテキスト構築
+            context_str = ""
+            ref_data = []
+            id_map = {str(d['id']): d for d in full_data}
+            
+            for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
+                context_str += f"[ID: {meta['id']}] {doc[:600]}...\n\n"
+                # 元データを取得して参照リスト用にする
+                original = id_map.get(str(meta['id']))
+                if original:
+                    ref_data.append(original)
+            
+            # 4. 回答生成 (Step 3)
+            system_msg = """
+            あなたは古代エジプト・ギリシア碑文の専門家です。
+            ユーザーの質問に対し、提供された【Context】を証拠として用いながら、
+            日本語で、学術的かつ論理的に回答してください。
+            回答の中で主張を行う際は、必ず [ID: xxxxx] の形式で出典を明記してください。
+            """
+            
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {prompt}"}
+                ]
+            )
+            ans = response.choices[0].message.content
+            
+        st.chat_message("assistant").write(ans)
+        st.session_state.chat_history.append({"role": "assistant", "content": ans})
+        
+        # 5. 共通リスト形式でエビデンス表示
+        with st.expander("📚 AIの検索戦略 & 参照エビデンス"):
+            st.info(f"**AIが検索した関連語:** {', '.join(plan.get('english_keywords', [])[:10])} ...")
+            render_citation_list(ref_data, title_prefix="回答に使用した碑文")
