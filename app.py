@@ -212,7 +212,7 @@ def count_in_range(data: List[Dict], year_range: Tuple[int, int]) -> int:
     return count
 
 
-def run_rag_chat(context: str, user_message: str) -> str:
+def run_rag_chat(context: str, user_message: str, allow_background: bool, answer_len: int) -> str:
     api_key = _get_api_key()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is missing in .env")
@@ -220,11 +220,31 @@ def run_rag_chat(context: str, user_message: str) -> str:
         raise RuntimeError("openai package is not available")
     client = OpenAI(api_key=api_key)
 
-    system_prompt = (
-        "You are a careful scholar. Answer ONLY from the provided inscriptions context. "
-        "After each factual statement, cite evidence in the format [ID: 12345]. "
-        "If the context is insufficient, say so explicitly and do not speculate."
-    )
+    length_hint = {
+        1: "Respond in 1-2 short sentences.",
+        2: "Respond in a short paragraph (3-4 sentences).",
+        3: "Respond in a medium-length answer (5-7 sentences).",
+        4: "Respond in a detailed answer (8-12 sentences).",
+        5: "Respond in a very detailed answer with structured paragraphs.",
+    }.get(answer_len, "Respond in a medium-length answer (5-7 sentences).")
+
+    if allow_background:
+        system_prompt = (
+            "You are a careful scholar. Use the provided inscriptions context first. "
+            "You may add general historical background knowledge if it is clearly marked as such. "
+            "Rules: "
+            "1) For statements grounded in inscriptions, cite evidence after each statement in the format [ID: 12345]. "
+            "2) For statements from general knowledge, prefix the sentence with '背景知識:' and do NOT cite inscription IDs. "
+            "3) Do not fabricate inscription content. If the context is insufficient, say so explicitly."
+            f" {length_hint}"
+        )
+    else:
+        system_prompt = (
+            "You are a careful scholar. Answer ONLY from the provided inscriptions context. "
+            "After each factual statement, cite evidence in the format [ID: 12345]. "
+            "If the context is insufficient, say so explicitly and do not speculate."
+            f" {length_hint}"
+        )
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_message}"},
@@ -604,6 +624,8 @@ def main():
         expand_query = st.checkbox("日本語クエリを拡張して検索精度を上げる", value=True)
         use_hybrid = st.checkbox("ベクトル+文字列のハイブリッド検索", value=True)
         alpha = st.slider("ベクトル寄りの重み", min_value=0.0, max_value=1.0, value=0.7, step=0.05)
+        allow_background = st.checkbox("背景知識モード（一般的な歴史知識も許可）", value=False)
+        answer_len = st.slider("回答の長さ", min_value=1, max_value=5, value=3)
 
         if "chroma_ready" not in st.session_state:
             st.session_state.chroma_ready = False
@@ -662,7 +684,7 @@ def main():
             with messages_box:
                 with st.chat_message("assistant"):
                     with st.spinner("回答生成中..."):
-                        answer = run_rag_chat(context, user_message)
+                        answer = run_rag_chat(context, user_message, allow_background, answer_len)
                         st.write(answer)
             st.session_state.chat_messages.append({"role": "assistant", "content": answer})
 
