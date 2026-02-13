@@ -53,15 +53,6 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.title("⚙️ Settings")
-    st.subheader("AI Model")
-    chat_model = st.selectbox(
-        "Select Model",
-        ["gpt-4o", "gpt-4o-mini"],
-        index=0,
-        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
-    )
-    st.divider()
     if st.session_state.analysis_history:
         st.subheader("分析履歴")
         for idx, item in enumerate(st.session_state.analysis_history[::-1]):
@@ -70,25 +61,27 @@ with st.sidebar:
                 st.session_state["analysis_selected"] = item
                 st.session_state["active_tab"] = "📊 年代推移"
                 st.rerun()
-    st.subheader("Chat History")
-    if st.button("🆕 New Chat"):
-        st.session_state.history = []
-        st.session_state.active_conversation = None
-        st.session_state["active_tab"] = "💬 碑文チャット"
-        st.rerun()
-    if st.button("🗑️ Clear History"):
-        st.session_state.history = []
-        st.session_state.conversations = []
-        st.session_state.active_conversation = None
-        st.rerun()
+    st.subheader("履歴")
     if st.session_state.conversations:
         for idx, conv in enumerate(st.session_state.conversations[::-1]):
             title = conv.get("title", f"Conversation {idx+1}")
-            if st.button(f"💬 {title}", key=f"conv_{idx}"):
-                st.session_state.history = conv.get("messages", [])
-                st.session_state.active_conversation = conv.get("id")
-                st.session_state["active_tab"] = "💬 碑文チャット"
-                st.rerun()
+            col_a, col_b = st.columns([5, 1])
+            with col_a:
+                if st.button(f"💬 {title}", key=f"conv_{idx}"):
+                    st.session_state.history = conv.get("messages", [])
+                    st.session_state.active_conversation = conv.get("id")
+                    st.session_state["active_tab"] = "💬 碑文チャット"
+                    st.rerun()
+            with col_b:
+                if st.button("🗑️", key=f"del_conv_{idx}"):
+                    conv_id = conv.get("id")
+                    st.session_state.conversations = [
+                        c for c in st.session_state.conversations if c.get("id") != conv_id
+                    ]
+                    if st.session_state.active_conversation == conv_id:
+                        st.session_state.active_conversation = None
+                        st.session_state.history = []
+                    st.rerun()
 
 # --- データロード ---
 @st.cache_resource
@@ -250,7 +243,7 @@ with col_logo:
     st.image("EGIAlogo.png", width=120)
 with col_title:
     st.title("Egyptian Greek Inscription Analyzer")
-st.caption(f"Powered by AI & Robust Normalization | Model: {chat_model}")
+st.caption("Powered by AI & Robust Normalization")
 
 collection = get_chroma_db()
 full_data = load_json_data()
@@ -328,6 +321,16 @@ if tab_choice == "📊 年代推移":
 # === Tab 2: チャット機能 (アップデート版) ===
 if tab_choice == "💬 碑文チャット":
     st.subheader("碑文チャット")
+    if st.button("🆕 新しいチャット"):
+        st.session_state.history = []
+        st.session_state.active_conversation = None
+    st.markdown("#### AI Model")
+    chat_model = st.selectbox(
+        "Select Model",
+        ["gpt-4o", "gpt-4o-mini"],
+        index=0,
+        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
+    )
 
     st.markdown(
         """
@@ -438,9 +441,13 @@ if tab_choice == "💬 碑文チャット":
             for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
                 mid = str(meta['id'])
                 if mid not in seen_refs:
-                    context_str += f"[ID: {mid}] {doc[:600]}...\n\n"
                     orig = id_map.get(mid)
-                    if orig: ref_data.append(orig)
+                    date_min = orig.get("date_min") if orig else ""
+                    date_max = orig.get("date_max") if orig else ""
+                    region = orig.get("region_sub") if orig else ""
+                    context_str += f"[ID: {mid}] Date: {date_min}–{date_max}; Region: {region}\n{doc[:600]}...\n\n"
+                    if orig:
+                        ref_data.append(orig)
                     seen_refs.add(mid)
             
             # 4. 回答生成
