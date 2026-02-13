@@ -330,7 +330,7 @@ def summarize_chat_title(text: str) -> str:
 # --- メイン UI ---
 col_logo, col_title = st.columns([1, 12])
 with col_logo:
-    st.image("EGIAlogo.png", width=120)
+    st.image("EGIAlogo.png", width=140)
 with col_title:
     st.title("Egyptian Greek Inscription Analyzer")
 st.caption("Powered by AI & Robust Normalization")
