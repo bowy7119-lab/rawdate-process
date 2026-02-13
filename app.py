@@ -19,8 +19,11 @@ CHROMA_PATH = "./chroma_db_store"
 DATA_FILE = "egypt_data_final.json" 
 
 def get_openai_api_key():
-    if "OPENAI_API_KEY" in st.secrets:
-        return st.secrets["OPENAI_API_KEY"]
+    try:
+        if "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
     return os.getenv("OPENAI_API_KEY", "")
 
 api_key = get_openai_api_key()
