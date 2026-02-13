@@ -18,7 +18,17 @@ st.set_page_config(page_title="Egyptian Greek Inscription Analyzer", layout="wid
 CHROMA_PATH = "./chroma_db_store"
 DATA_FILE = "egypt_data_final.json" 
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_openai_api_key():
+    if "OPENAI_API_KEY" in st.secrets:
+        return st.secrets["OPENAI_API_KEY"]
+    return os.getenv("OPENAI_API_KEY", "")
+
+api_key = get_openai_api_key()
+if not api_key:
+    st.error("OPENAI_API_KEY が未設定です。Streamlit secrets に設定してください。")
+    st.stop()
+
+client = OpenAI(api_key=api_key)
 
 # --- サイドバー固定幅 & チャット履歴 ---
 if "history" not in st.session_state:
