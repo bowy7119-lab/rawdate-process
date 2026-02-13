@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import unicodedata
 import re
-import textwrap
 
 # --- 基本設定 ---
 load_dotenv()
@@ -30,12 +29,6 @@ if "active_conversation" not in st.session_state:
     st.session_state.active_conversation = None
 if "analysis_history" not in st.session_state:
     st.session_state.analysis_history = []
-if "analysis_selected" not in st.session_state:
-    st.session_state.analysis_selected = None
-if "history_items" not in st.session_state:
-    st.session_state.history_items = []
-if "last_refs" not in st.session_state:
-    st.session_state.last_refs = []
 
 with st.sidebar:
     st.subheader("モード選択")
@@ -56,53 +49,45 @@ with st.sidebar:
         section[data-testid="stSidebar"] > div {
             width: 360px !important;
         }
-        /* Left-align sidebar buttons */
-        section[data-testid="stSidebar"] button {
-            text-align: left !important;
-            justify-content: flex-start !important;
-        }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.subheader("履歴")
-    # Build a unified list (analysis + chat)
-    history_items = []
-    for a in st.session_state.analysis_history:
-        history_items.append({"type": "analysis", "title": a.get("title", "Analysis"), "data": a})
-    for c in st.session_state.conversations:
-        history_items.append({"type": "chat", "title": c.get("title", "Conversation"), "data": c})
-
-    for idx, item in enumerate(history_items[::-1]):
-        icon = "📊" if item["type"] == "analysis" else "💬"
-        title = item["title"]
-        col_a, col_b = st.columns([5, 1])
-        with col_a:
-            if st.button(f"{icon} {title}", key=f"hist_{idx}"):
-                if item["type"] == "analysis":
-                    st.session_state["analysis_selected"] = item["data"]
-                    st.session_state["active_tab"] = "📊 年代推移"
-                else:
-                    st.session_state.history = item["data"].get("messages", [])
-                    st.session_state.active_conversation = item["data"].get("id")
-                    st.session_state["active_tab"] = "💬 碑文チャット"
+    st.title("⚙️ Settings")
+    st.subheader("AI Model")
+    chat_model = st.selectbox(
+        "Select Model",
+        ["gpt-4o", "gpt-4o-mini"],
+        index=0,
+        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
+    )
+    st.divider()
+    if st.session_state.analysis_history:
+        st.subheader("分析履歴")
+        for idx, item in enumerate(st.session_state.analysis_history[::-1]):
+            title = item.get("title", f"Analysis {idx+1}")
+            if st.button(f"📊 {title}", key=f"analysis_{idx}"):
+                st.session_state["analysis_selected"] = item
+                st.session_state["active_tab"] = "📊 年代推移"
                 st.rerun()
-        with col_b:
-            if st.button("🗑️", key=f"del_hist_{idx}"):
-                if item["type"] == "analysis":
-                    st.session_state.analysis_history = [
-                        a for a in st.session_state.analysis_history if a != item["data"]
-                    ]
-                    if st.session_state.get("analysis_selected") == item["data"]:
-                        st.session_state["analysis_selected"] = None
-                else:
-                    conv_id = item["data"].get("id")
-                    st.session_state.conversations = [
-                        c for c in st.session_state.conversations if c.get("id") != conv_id
-                    ]
-                    if st.session_state.active_conversation == conv_id:
-                        st.session_state.active_conversation = None
-                        st.session_state.history = []
+    st.subheader("Chat History")
+    if st.button("🆕 New Chat"):
+        st.session_state.history = []
+        st.session_state.active_conversation = None
+        st.session_state["active_tab"] = "💬 碑文チャット"
+        st.rerun()
+    if st.button("🗑️ Clear History"):
+        st.session_state.history = []
+        st.session_state.conversations = []
+        st.session_state.active_conversation = None
+        st.rerun()
+    if st.session_state.conversations:
+        for idx, conv in enumerate(st.session_state.conversations[::-1]):
+            title = conv.get("title", f"Conversation {idx+1}")
+            if st.button(f"💬 {title}", key=f"conv_{idx}"):
+                st.session_state.history = conv.get("messages", [])
+                st.session_state.active_conversation = conv.get("id")
+                st.session_state["active_tab"] = "💬 碑文チャット"
                 st.rerun()
 
 # --- データロード ---
@@ -238,61 +223,17 @@ def analyze_data_robust(data, query):
     return df_trend, df_pie, matched_items, list(target_greek)
 
 # --- UIコンポーネント: 出典リスト ---
-def render_citation_list(inscriptions, title_prefix="ヒットした碑文"):
-    st.markdown(f"### 📜 {title_prefix} ({len(inscriptions)})")
-    if not inscriptions:
-        st.caption("参照データがありません。")
-        return
-
-    # Build year range for slider
-    years_min = []
-    years_max = []
-    for item in inscriptions:
-        try:
-            dmin = int(item.get("date_min"))
-            dmax = int(item.get("date_max"))
-        except Exception:
-            continue
-        years_min.append(dmin)
-        years_max.append(dmax)
-    if years_min and years_max:
-        yr_min = min(years_min)
-        yr_max = max(years_max)
-        year_range = st.slider(
-            "年代フィルタ",
-            min_value=yr_min,
-            max_value=yr_max,
-            value=(yr_min, yr_max),
-            key=f"filter_{title_prefix}",
-        )
-    else:
-        year_range = None
-        st.caption("年代情報のない碑文が含まれます。")
-
+def render_citation_list(inscriptions, max_items=20, title_prefix="ヒットした碑文"):
+    st.markdown(f"### 📜 {title_prefix} (Top {min(len(inscriptions), max_items)})")
+    
     seen_ids = set()
     unique_items = []
     for item in inscriptions:
         if item['id'] not in seen_ids:
             unique_items.append(item)
             seen_ids.add(item['id'])
-
-    # Apply year filter
-    if year_range is not None:
-        y0, y1 = year_range
-        filtered = []
-        for item in unique_items:
-            try:
-                dmin = int(item.get("date_min"))
-                dmax = int(item.get("date_max"))
-            except Exception:
-                continue
-            if dmin <= y1 and dmax >= y0:
-                filtered.append(item)
-        unique_items = filtered
-
-    st.caption(f"表示件数: {len(unique_items)}")
-
-    for item in unique_items:
+            
+    for item in unique_items[:max_items]:
         label = f"**ID: {item['id']}** | {item.get('date_min')}~{item.get('date_max')} | {item.get('region_sub', 'Unknown')}"
         with st.expander(label):
             col1, col2 = st.columns(2)
@@ -303,37 +244,13 @@ def render_citation_list(inscriptions, title_prefix="ヒットした碑文"):
                 st.markdown("**English Translation:**")
                 st.write(item.get('english_translation', '(No translation)'))
 
-# --- Chat title summarization ---
-def summarize_chat_title(text: str) -> str:
-    if not text:
-        return "無題"
-    prompt = (
-        "Summarize the following user request into a short Japanese title (<= 12 characters). "
-        "Return only the title."
-    )
-    try:
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": text},
-            ],
-            temperature=0.2,
-        )
-        title = (res.choices[0].message.content or "").strip()
-        if title:
-            return title
-    except Exception:
-        pass
-    return textwrap.shorten(text, width=20, placeholder="…")
-
 # --- メイン UI ---
 col_logo, col_title = st.columns([1, 12])
 with col_logo:
-    st.image("EGIAlogo.png", width=140)
+    st.image("EGIAlogo.png", width=120)
 with col_title:
     st.title("Egyptian Greek Inscription Analyzer")
-st.caption("Powered by AI & Robust Normalization")
+st.caption(f"Powered by AI & Robust Normalization | Model: {chat_model}")
 
 collection = get_chroma_db()
 full_data = load_json_data()
@@ -376,16 +293,16 @@ if tab_choice == "📊 年代推移":
                     render_citation_list(hits, title_prefix="検索ヒット")
                     # Save analysis to sidebar history
                     title = f"{query} ({len(hits)} hits)"
-                    analysis_item = {
-                        "title": title,
-                        "query": query,
-                        "hits": hits,
-                        "trend": df_trend,
-                        "pie": df_pie,
-                        "search_stems": search_stems,
-                    }
-                    st.session_state.analysis_history.append(analysis_item)
-                    st.session_state.analysis_selected = analysis_item
+                    st.session_state.analysis_history.append(
+                        {
+                            "title": title,
+                            "query": query,
+                            "hits": hits,
+                            "trend": df_trend,
+                            "pie": df_pie,
+                            "search_stems": search_stems,
+                        }
+                    )
                 else:
                     st.warning("該当データなし")
 
@@ -411,16 +328,6 @@ if tab_choice == "📊 年代推移":
 # === Tab 2: チャット機能 (アップデート版) ===
 if tab_choice == "💬 碑文チャット":
     st.subheader("碑文チャット")
-    if st.button("🆕 新しいチャット"):
-        st.session_state.history = []
-        st.session_state.active_conversation = None
-    st.markdown("#### AI Model")
-    chat_model = st.selectbox(
-        "Select Model",
-        ["gpt-4o", "gpt-4o-mini"],
-        index=0,
-        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
-    )
 
     st.markdown(
         """
@@ -492,13 +399,6 @@ if tab_choice == "💬 碑文チャット":
             font-style: normal !important;
         }
         </style>
-        <script>
-        // Prevent auto-scroll to bottom by blurring chat input on rerun
-        window.addEventListener('load', () => {
-          const input = document.querySelector('div[data-testid="stChatInput"] textarea, div[data-testid="stChatInput"] input');
-          if (input) { input.blur(); }
-        });
-        </script>
         """,
         unsafe_allow_html=True,
     )
@@ -507,11 +407,9 @@ if tab_choice == "💬 碑文チャット":
     
     for m in st.session_state.history:
         st.chat_message(m["role"]).write(m["content"])
-
-    # Fallback: show a single checkbox for the latest refs if per-message checkbox doesn't render
-    if st.session_state.last_refs:
-        with st.expander("🔍 参照エビデンス", expanded=False):
-            render_citation_list(st.session_state.last_refs, title_prefix="参照データ")
+        if m.get("role") == "assistant" and m.get("refs"):
+            with st.expander("🔍 参照エビデンス"):
+                render_citation_list(m["refs"], title_prefix="参照データ")
     
     if p := st.chat_input("質問を入力"):
         st.session_state.history.append({"role": "user", "content": p})
@@ -540,13 +438,9 @@ if tab_choice == "💬 碑文チャット":
             for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
                 mid = str(meta['id'])
                 if mid not in seen_refs:
+                    context_str += f"[ID: {mid}] {doc[:600]}...\n\n"
                     orig = id_map.get(mid)
-                    date_min = orig.get("date_min") if orig else ""
-                    date_max = orig.get("date_max") if orig else ""
-                    region = orig.get("region_sub") if orig else ""
-                    context_str += f"[ID: {mid}] Date: {date_min}–{date_max}; Region: {region}\n{doc[:600]}...\n\n"
-                    if orig:
-                        ref_data.append(orig)
+                    if orig: ref_data.append(orig)
                     seen_refs.add(mid)
             
             # 4. 回答生成
@@ -584,10 +478,9 @@ if tab_choice == "💬 碑文チャット":
         st.session_state.history.append(
             {"role": "assistant", "content": ans, "refs": ref_data}
         )
-        st.session_state.last_refs = ref_data
 
         # Save conversation summary into sidebar list
-        summary_title = summarize_chat_title(p)
+        summary_title = p[:24] + ("…" if len(p) > 24 else "")
         if st.session_state.active_conversation is None:
             conv_id = f"conv_{len(st.session_state.conversations)+1}"
             st.session_state.conversations.append(
@@ -609,5 +502,6 @@ if tab_choice == "💬 碑文チャット":
                     break
         
         # ユーザーに「どんな言葉で検索したか」を見せる（透明性）
-        st.info(f"**AIが生成した検索語:**\n- English: {', '.join(strategy.get('english', []))}\n- Greek: {', '.join(strategy.get('greek', []))}")
-        st.rerun()
+        with st.expander("🔍 AIの検索戦略 & 参照エビデンス"):
+            st.info(f"**AIが生成した検索語:**\n- English: {', '.join(strategy.get('english', []))}\n- Greek: {', '.join(strategy.get('greek', []))}")
+            render_citation_list(ref_data, title_prefix="参照データ")
