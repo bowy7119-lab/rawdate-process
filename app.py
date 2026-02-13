@@ -31,6 +31,15 @@ if "analysis_history" not in st.session_state:
     st.session_state.analysis_history = []
 
 with st.sidebar:
+    st.subheader("モード選択")
+    tab_choice = st.radio(
+        "",
+        ["📊 年代推移", "💬 碑文チャット"],
+        index=0 if st.session_state.get("active_tab") == "📊 年代推移" else 1,
+    )
+    st.session_state["active_tab"] = tab_choice
+
+    st.divider()
     st.markdown(
         """
         <style>
@@ -44,39 +53,35 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.title("⚙️ Settings")
-    st.subheader("AI Model")
-    chat_model = st.selectbox(
-        "Select Model",
-        ["gpt-4o", "gpt-4o-mini"],
-        index=0,
-        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
-    )
-    st.divider()
-    st.subheader("Chat History")
-    if st.button("🆕 New Chat"):
-        st.session_state.history = []
-        st.session_state.active_conversation = None
-        st.rerun()
-    if st.button("🗑️ Clear History"):
-        st.session_state.history = []
-        st.session_state.conversations = []
-        st.session_state.active_conversation = None
-        st.rerun()
-    if st.session_state.conversations:
-        for idx, conv in enumerate(st.session_state.conversations[::-1]):
-            title = conv.get("title", f"Conversation {idx+1}")
-            if st.button(f"💬 {title}", key=f"conv_{idx}"):
-                st.session_state.history = conv.get("messages", [])
-                st.session_state.active_conversation = conv.get("id")
-                st.rerun()
     if st.session_state.analysis_history:
         st.subheader("分析履歴")
         for idx, item in enumerate(st.session_state.analysis_history[::-1]):
             title = item.get("title", f"Analysis {idx+1}")
             if st.button(f"📊 {title}", key=f"analysis_{idx}"):
                 st.session_state["analysis_selected"] = item
+                st.session_state["active_tab"] = "📊 年代推移"
                 st.rerun()
+    st.subheader("履歴")
+    if st.session_state.conversations:
+        for idx, conv in enumerate(st.session_state.conversations[::-1]):
+            title = conv.get("title", f"Conversation {idx+1}")
+            col_a, col_b = st.columns([5, 1])
+            with col_a:
+                if st.button(f"💬 {title}", key=f"conv_{idx}"):
+                    st.session_state.history = conv.get("messages", [])
+                    st.session_state.active_conversation = conv.get("id")
+                    st.session_state["active_tab"] = "💬 碑文チャット"
+                    st.rerun()
+            with col_b:
+                if st.button("🗑️", key=f"del_conv_{idx}"):
+                    conv_id = conv.get("id")
+                    st.session_state.conversations = [
+                        c for c in st.session_state.conversations if c.get("id") != conv_id
+                    ]
+                    if st.session_state.active_conversation == conv_id:
+                        st.session_state.active_conversation = None
+                        st.session_state.history = []
+                    st.rerun()
 
 # --- データロード ---
 @st.cache_resource
@@ -233,8 +238,12 @@ def render_citation_list(inscriptions, max_items=20, title_prefix="ヒットし�
                 st.write(item.get('english_translation', '(No translation)'))
 
 # --- メイン UI ---
-st.title("🏛️ Egyptian Greek Inscription Analyzer")
-st.caption(f"Powered by AI & Robust Normalization | Model: {chat_model}")
+col_logo, col_title = st.columns([1, 12])
+with col_logo:
+    st.image("EGIAlogo.png", width=120)
+with col_title:
+    st.title("Egyptian Greek Inscription Analyzer")
+st.caption("Powered by AI & Robust Normalization")
 
 collection = get_chroma_db()
 full_data = load_json_data()
@@ -243,10 +252,11 @@ if collection is None or not full_data:
     st.error("データ準備が完了していません。Step 1/1.5, Step 2 を実行してください。")
     st.stop()
 
-tab_trend, tab_chat = st.tabs(["📊 年代推移", "💬 碑文チャット"])
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = "📊 年代推移"
 
 # === Tab 1: 年代推移 (完成済) ===
-with tab_trend:
+if tab_choice == "📊 年代推移":
     st.subheader("AI推論と正規化による年代推移")
     query = st.text_input("検索語（例: καισαρ, ptolemy）", "καισαρ")
     
@@ -309,8 +319,18 @@ with tab_trend:
             render_citation_list(sel.get("hits", []), title_prefix="検索ヒット")
 
 # === Tab 2: チャット機能 (アップデート版) ===
-with tab_chat:
+if tab_choice == "💬 碑文チャット":
     st.subheader("碑文チャット")
+    if st.button("🆕 新しいチャット"):
+        st.session_state.history = []
+        st.session_state.active_conversation = None
+    st.markdown("#### AI Model")
+    chat_model = st.selectbox(
+        "Select Model",
+        ["gpt-4o", "gpt-4o-mini"],
+        index=0,
+        help="gpt-4o: 高精度\ngpt-4o-mini: 高速"
+    )
 
     st.markdown(
         """
@@ -377,6 +397,10 @@ with tab_chat:
         .block-container {
             padding-bottom: 8.5rem;
         }
+        /* Prevent unintended italics in model output */
+        div[data-testid="stChatMessage"] em {
+            font-style: normal !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -417,31 +441,45 @@ with tab_chat:
             for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
                 mid = str(meta['id'])
                 if mid not in seen_refs:
-                    context_str += f"[ID: {mid}] {doc[:600]}...\n\n"
                     orig = id_map.get(mid)
-                    if orig: ref_data.append(orig)
+                    date_min = orig.get("date_min") if orig else ""
+                    date_max = orig.get("date_max") if orig else ""
+                    region = orig.get("region_sub") if orig else ""
+                    context_str += f"[ID: {mid}] Date: {date_min}–{date_max}; Region: {region}\n{doc[:600]}...\n\n"
+                    if orig:
+                        ref_data.append(orig)
                     seen_refs.add(mid)
             
             # 4. 回答生成
             sys_msg = """
             あなたは古代エジプト・ギリシア碑文の専門家です。
-            提供された【Context】(英訳付き碑文)のみを証拠として用い、
-            質問に対して日本語で学術的かつ論理的に回答してください。
+            提供された【Context】(英訳付き碑文)を根拠として用い、
+            不足する歴史的背景は一般知識として補いながら、質問に対して日本語で詳細に回答してください。
             
             ルール:
-            1. 主張を行う際は、必ず [ID: xxxxx] の形式で出典を明記してください。
-            2. 文脈から、碑文の記述が質問に関連する理由を補足してください。
-            3. 碑文中の記号（[ ]など）は、読みやすいように補って解釈してください。
+            1. 碑文から根拠を引く場合は、必ず [ID: xxxxx] の形式で出典を明記してください。
+            1. 可能な限り多くの該当碑文を引用し、代表的なものは複数挙げてください（少なくとも6件以上を目標）。
+            2. 引用する碑文については必ず年代（date_min〜date_max）を明示し、その年代背景を加味して解説してください。
+            3. 各碑文の解説には「年代背景・地域・事象（宗教/政治/社会）」のいずれかを含め、年代に即した分析を必ず行ってください。
+            4. 歴史的背景・一般知識で補足する部分は文頭に「背景知識:」と明示し、出典IDは付けないでください。
+            5. 文脈から、碑文の記述が質問に関連する理由を補足してください。
+            6. 碑文中の記号（[ ]など）は、読みやすいように補って解釈してください。
+            7. 回答は十分に長く、詳細にしてください。
             """
             
-            ans_res = client.chat.completions.create(
-                model=chat_model,
-                messages=[
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {p}"}
-                ]
-            )
-            ans = ans_res.choices[0].message.content
+            try:
+                ans_res = client.chat.completions.create(
+                    model=chat_model,
+                    messages=[
+                        {"role": "system", "content": sys_msg},
+                        {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {p}"}
+                    ]
+                )
+                ans = (ans_res.choices[0].message.content or "").strip()
+            except Exception as e:
+                ans = f"回答の生成に失敗しました。再度お試しください。\n\n詳細: {e}"
+            if not ans:
+                ans = "回答が空でした。再度お試しください。"
             
         st.chat_message("assistant").write(ans)
         st.session_state.history.append(
